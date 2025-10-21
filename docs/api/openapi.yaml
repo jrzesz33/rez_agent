@@ -1,0 +1,1008 @@
+openapi: 3.0.3
+info:
+  title: rez_agent API
+  description: |
+    REST API for the rez_agent event-driven messaging system.
+
+    This API provides endpoints for managing messages, viewing metrics, and handling user authentication.
+    All endpoints (except /health and /auth/*) require JWT authentication via AWS Cognito.
+
+    ## Authentication
+    - Obtain JWT token via OAuth 2.0 flow (POST /api/auth/login)
+    - Include token in Authorization header: `Authorization: Bearer <token>`
+    - Tokens expire after 1 hour (refresh via /api/auth/refresh)
+
+    ## Environments
+    - dev: https://api-dev.rez-agent.example.com
+    - stage: https://api-stage.rez-agent.example.com
+    - prod: https://api.rez-agent.example.com
+  version: 1.0.0
+  contact:
+    name: rez_agent Team
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api-dev.rez-agent.example.com
+    description: Development environment
+  - url: https://api-stage.rez-agent.example.com
+    description: Staging environment
+  - url: https://api.rez-agent.example.com
+    description: Production environment
+
+tags:
+  - name: messages
+    description: Message management operations
+  - name: metrics
+    description: Dashboard metrics and analytics
+  - name: auth
+    description: Authentication and authorization
+  - name: health
+    description: Health check endpoints
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/messages:
+    get:
+      tags:
+        - messages
+      summary: List messages
+      description: |
+        Retrieve a paginated list of messages with optional filtering.
+
+        **Access Control**: Requires valid JWT token.
+
+        **Query Parameters**:
+        - Filter by stage, status, message_type, created_by
+        - Date range filtering via created_after/created_before
+        - Cursor-based pagination via cursor parameter
+        - Results sorted by created_date (descending by default)
+
+        **Performance**: Queries DynamoDB GSI (stage-created_date-index or status-created_date-index)
+      operationId: listMessages
+      parameters:
+        - name: stage
+          in: query
+          description: Filter by environment stage
+          required: false
+          schema:
+            type: string
+            enum: [dev, stage, prod]
+            example: dev
+        - name: status
+          in: query
+          description: Filter by message status
+          required: false
+          schema:
+            type: string
+            enum: [created, queued, processing, completed, failed]
+            example: completed
+        - name: message_type
+          in: query
+          description: Filter by message type
+          required: false
+          schema:
+            type: string
+            example: scheduled_hello
+        - name: created_by
+          in: query
+          description: Filter by creator (e.g., "scheduler", "user:email@example.com")
+          required: false
+          schema:
+            type: string
+            example: scheduler
+        - name: created_after
+          in: query
+          description: Filter messages created after this timestamp (ISO 8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-10-21T00:00:00Z"
+        - name: created_before
+          in: query
+          description: Filter messages created before this timestamp (ISO 8601)
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2025-10-21T23:59:59Z"
+        - name: limit
+          in: query
+          description: Maximum number of results to return (default 50, max 100)
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+            example: 50
+        - name: cursor
+          in: query
+          description: Pagination cursor from previous response (base64-encoded LastEvaluatedKey)
+          required: false
+          schema:
+            type: string
+            example: eyJtZXNzYWdlX2lkIjogInV1aWQifQ==
+      responses:
+        '200':
+          description: Successful response with message list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+              example:
+                data:
+                  - message_id: 550e8400-e29b-41d4-a716-446655440000
+                    created_date: "2025-10-21T14:30:00Z"
+                    created_by: scheduler
+                    stage: dev
+                    message_type: scheduled_hello
+                    status: completed
+                    payload:
+                      text: hello world
+                      priority: default
+                      tags: [scheduled, daily]
+                    updated_date: "2025-10-21T14:30:15Z"
+                    processing_started_at: "2025-10-21T14:30:05Z"
+                    processing_completed_at: "2025-10-21T14:30:15Z"
+                    retry_count: 0
+                pagination:
+                  limit: 50
+                  cursor: eyJtZXNzYWdlX2lkIjogIm5leHQtdXVpZCJ9
+                  has_more: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+        - BearerAuth: []
+
+    post:
+      tags:
+        - messages
+      summary: Create a new message
+      description: |
+        Manually create a new message and publish to the processing pipeline.
+
+        **Access Control**: Requires valid JWT token. Creator is automatically set to authenticated user.
+
+        **Flow**:
+        1. Validate request payload
+        2. Create message record in DynamoDB (status="created")
+        3. Publish message event to SNS topic
+        4. Return 202 Accepted with message_id
+        5. Async processing continues via SQS → Lambda
+
+        **Idempotency**: Not idempotent. Each POST creates a new message with unique message_id.
+      operationId: createMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+            example:
+              stage: dev
+              message_type: manual_notification
+              payload:
+                text: Manual test message
+                title: Test Notification
+                priority: high
+                tags: [manual, test]
+      responses:
+        '202':
+          description: Message accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateMessageResponse'
+              example:
+                message_id: 660e9500-f39c-52e5-b827-557766551111
+                status: created
+                created_date: "2025-10-21T15:00:00Z"
+                message: Message accepted for processing
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+        - BearerAuth: []
+
+  /api/messages/{message_id}:
+    get:
+      tags:
+        - messages
+      summary: Get message by ID
+      description: |
+        Retrieve a single message by its unique identifier.
+
+        **Access Control**: Requires valid JWT token.
+
+        **Performance**: Direct DynamoDB GetItem (single-digit ms latency)
+      operationId: getMessage
+      parameters:
+        - name: message_id
+          in: path
+          required: true
+          description: Unique message identifier (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        '200':
+          description: Message found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Message not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: MESSAGE_NOT_FOUND
+                  message: Message with ID 550e8400-e29b-41d4-a716-446655440000 not found
+                  details: {}
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+        - BearerAuth: []
+
+  /api/metrics:
+    get:
+      tags:
+        - metrics
+      summary: Get dashboard metrics
+      description: |
+        Retrieve aggregated metrics for the dashboard.
+
+        **Access Control**: Requires valid JWT token.
+
+        **Metrics Included**:
+        - Total messages by status (last 24 hours)
+        - Success rate (completed / total processed)
+        - Average processing time
+        - Recent messages (last 10)
+        - Failed message count
+
+        **Performance**: Multiple DynamoDB queries + in-memory aggregation. Consider caching for high traffic.
+      operationId: getMetrics
+      parameters:
+        - name: stage
+          in: query
+          description: Filter metrics by stage (defaults to all stages)
+          required: false
+          schema:
+            type: string
+            enum: [dev, stage, prod]
+        - name: time_range
+          in: query
+          description: Time range for metrics (hours)
+          required: false
+          schema:
+            type: integer
+            enum: [1, 6, 24, 168]
+            default: 24
+            example: 24
+      responses:
+        '200':
+          description: Metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+              example:
+                metrics:
+                  time_range_hours: 24
+                  total_messages: 150
+                  status_counts:
+                    created: 2
+                    queued: 0
+                    processing: 1
+                    completed: 142
+                    failed: 5
+                  success_rate: 0.966
+                  average_processing_time_seconds: 8.5
+                  recent_messages:
+                    - message_id: 550e8400-e29b-41d4-a716-446655440000
+                      created_date: "2025-10-21T14:30:00Z"
+                      status: completed
+                      message_type: scheduled_hello
+                generated_at: "2025-10-21T15:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+        - BearerAuth: []
+
+  /api/auth/login:
+    post:
+      tags:
+        - auth
+      summary: Initiate OAuth 2.0 login
+      description: |
+        Initiate OAuth 2.0 authorization code flow with AWS Cognito.
+
+        **Flow**:
+        1. Client sends POST /api/auth/login
+        2. Server returns Cognito authorization URL
+        3. Client redirects user to authorization URL
+        4. User authenticates with Cognito (username/password or federated identity)
+        5. Cognito redirects to callback URL with authorization code
+        6. Client sends code to POST /api/auth/callback
+        7. Server exchanges code for JWT tokens
+
+        **Security**: PKCE (Proof Key for Code Exchange) recommended for public clients.
+      operationId: initiateLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              redirect_uri: https://frontend.example.com/auth/callback
+              state: random-state-string
+      responses:
+        '200':
+          description: Authorization URL generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                authorization_url: https://rez-agent.auth.us-east-1.amazoncognito.com/oauth2/authorize?client_id=abc123&redirect_uri=https://frontend.example.com/auth/callback&response_type=code&state=random-state-string&scope=openid+email+profile
+                state: random-state-string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+
+  /api/auth/callback:
+    post:
+      tags:
+        - auth
+      summary: OAuth 2.0 callback (exchange code for tokens)
+      description: |
+        Exchange authorization code for JWT access and refresh tokens.
+
+        **Flow**:
+        1. Client receives authorization code from Cognito redirect
+        2. Client sends code to this endpoint
+        3. Server exchanges code for tokens via Cognito token endpoint
+        4. Server returns access_token, refresh_token, id_token
+
+        **Token Expiration**:
+        - access_token: 1 hour
+        - refresh_token: 30 days
+        - id_token: 1 hour
+      operationId: handleCallback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallbackRequest'
+            example:
+              code: authorization-code-from-cognito
+              redirect_uri: https://frontend.example.com/auth/callback
+      responses:
+        '200':
+          description: Tokens issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                access_token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+                refresh_token: eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ...
+                id_token: eyJhbGciOiJSUzI1NiIsImtpZCI6IjEyMyJ9...
+                token_type: Bearer
+                expires_in: 3600
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid authorization code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_AUTHORIZATION_CODE
+                  message: Authorization code is invalid or expired
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+
+  /api/auth/refresh:
+    post:
+      tags:
+        - auth
+      summary: Refresh access token
+      description: |
+        Exchange refresh token for new access token.
+
+        **Use Case**: Access token expired (401 response), use refresh token to get new access token without re-authentication.
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+            example:
+              refresh_token: eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ...
+      responses:
+        '200':
+          description: New access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_REFRESH_TOKEN
+                  message: Refresh token is invalid or expired. Please log in again.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+
+  /api/health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      description: |
+        Health check endpoint for load balancer and monitoring.
+
+        **Checks**:
+        - Lambda function is running
+        - DynamoDB table accessible (optional deep check)
+        - SNS topic accessible (optional deep check)
+
+        **Use Case**: ALB target group health check, monitoring tools
+      operationId: healthCheck
+      parameters:
+        - name: deep
+          in: query
+          description: Perform deep health check (verify dependencies)
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                timestamp: "2025-10-21T15:00:00Z"
+                version: 1.0.0
+                checks:
+                  dynamodb: ok
+                  sns: ok
+        '503':
+          description: Service unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: unhealthy
+                timestamp: "2025-10-21T15:00:00Z"
+                version: 1.0.0
+                checks:
+                  dynamodb: ok
+                  sns: failed
+                errors:
+                  - SNS topic not accessible
+      security: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token issued by AWS Cognito.
+
+        Include in Authorization header: `Authorization: Bearer <token>`
+
+        Obtain token via POST /api/auth/login → POST /api/auth/callback flow.
+
+  schemas:
+    Message:
+      type: object
+      required:
+        - message_id
+        - created_date
+        - created_by
+        - stage
+        - message_type
+        - status
+        - payload
+        - updated_date
+        - correlation_id
+      properties:
+        message_id:
+          type: string
+          format: uuid
+          description: Unique message identifier
+          example: 550e8400-e29b-41d4-a716-446655440000
+        created_date:
+          type: string
+          format: date-time
+          description: Message creation timestamp (ISO 8601)
+          example: "2025-10-21T14:30:00Z"
+        created_by:
+          type: string
+          description: Creator identifier (scheduler, user email, system)
+          example: scheduler
+        stage:
+          type: string
+          enum: [dev, stage, prod]
+          description: Environment stage
+          example: dev
+        message_type:
+          type: string
+          description: Type of message/job
+          example: scheduled_hello
+        status:
+          type: string
+          enum: [created, queued, processing, completed, failed]
+          description: Message lifecycle status
+          example: completed
+        payload:
+          type: object
+          description: Message content (varies by message_type)
+          additionalProperties: true
+          example:
+            text: hello world
+            priority: default
+            tags: [scheduled, daily]
+        updated_date:
+          type: string
+          format: date-time
+          description: Last update timestamp
+          example: "2025-10-21T14:30:15Z"
+        processing_started_at:
+          type: string
+          format: date-time
+          description: When processing began
+          nullable: true
+          example: "2025-10-21T14:30:05Z"
+        processing_completed_at:
+          type: string
+          format: date-time
+          description: When processing finished
+          nullable: true
+          example: "2025-10-21T14:30:15Z"
+        error_message:
+          type: string
+          description: Error details if status=failed
+          nullable: true
+          example: ntfy.sh API returned 503 Service Unavailable
+        retry_count:
+          type: integer
+          description: Number of retry attempts
+          default: 0
+          example: 0
+        notification_id:
+          type: string
+          description: External notification identifier (e.g., ntfy.sh ID)
+          nullable: true
+          example: ntfy_abc123
+        correlation_id:
+          type: string
+          format: uuid
+          description: Distributed tracing correlation ID (X-Ray)
+          example: 660e9500-f39c-52e5-b827-557766551111
+
+    CreateMessageRequest:
+      type: object
+      required:
+        - stage
+        - message_type
+        - payload
+      properties:
+        stage:
+          type: string
+          enum: [dev, stage, prod]
+          description: Target environment stage
+          example: dev
+        message_type:
+          type: string
+          description: Type of message to create
+          example: manual_notification
+        payload:
+          type: object
+          description: Message content (schema varies by message_type)
+          additionalProperties: true
+          example:
+            text: Manual test message
+            priority: high
+            tags: [manual, test]
+
+    CreateMessageResponse:
+      type: object
+      required:
+        - message_id
+        - status
+        - created_date
+        - message
+      properties:
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for created message
+          example: 660e9500-f39c-52e5-b827-557766551111
+        status:
+          type: string
+          enum: [created]
+          description: Initial message status
+          example: created
+        created_date:
+          type: string
+          format: date-time
+          description: Message creation timestamp
+          example: "2025-10-21T15:00:00Z"
+        message:
+          type: string
+          description: Success message
+          example: Message accepted for processing
+
+    MessageListResponse:
+      type: object
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+          description: List of messages
+        pagination:
+          type: object
+          required:
+            - limit
+            - has_more
+          properties:
+            limit:
+              type: integer
+              description: Number of results per page
+              example: 50
+            cursor:
+              type: string
+              description: Cursor for next page (base64-encoded DynamoDB LastEvaluatedKey)
+              nullable: true
+              example: eyJtZXNzYWdlX2lkIjogIm5leHQtdXVpZCJ9
+            has_more:
+              type: boolean
+              description: Whether more results are available
+              example: true
+
+    MetricsResponse:
+      type: object
+      required:
+        - metrics
+        - generated_at
+      properties:
+        metrics:
+          type: object
+          required:
+            - time_range_hours
+            - total_messages
+            - status_counts
+            - success_rate
+          properties:
+            time_range_hours:
+              type: integer
+              description: Time range for metrics (hours)
+              example: 24
+            total_messages:
+              type: integer
+              description: Total messages in time range
+              example: 150
+            status_counts:
+              type: object
+              description: Message counts by status
+              properties:
+                created:
+                  type: integer
+                  example: 2
+                queued:
+                  type: integer
+                  example: 0
+                processing:
+                  type: integer
+                  example: 1
+                completed:
+                  type: integer
+                  example: 142
+                failed:
+                  type: integer
+                  example: 5
+            success_rate:
+              type: number
+              format: float
+              description: Success rate (completed / total processed)
+              minimum: 0
+              maximum: 1
+              example: 0.966
+            average_processing_time_seconds:
+              type: number
+              format: float
+              description: Average processing time in seconds
+              example: 8.5
+            recent_messages:
+              type: array
+              items:
+                type: object
+                properties:
+                  message_id:
+                    type: string
+                    format: uuid
+                  created_date:
+                    type: string
+                    format: date-time
+                  status:
+                    type: string
+                  message_type:
+                    type: string
+              description: Most recent messages (last 10)
+        generated_at:
+          type: string
+          format: date-time
+          description: Metrics generation timestamp
+          example: "2025-10-21T15:00:00Z"
+
+    LoginRequest:
+      type: object
+      required:
+        - redirect_uri
+      properties:
+        redirect_uri:
+          type: string
+          format: uri
+          description: OAuth callback URL (must be registered in Cognito)
+          example: https://frontend.example.com/auth/callback
+        state:
+          type: string
+          description: CSRF protection state parameter (random string)
+          example: random-state-string
+
+    LoginResponse:
+      type: object
+      required:
+        - authorization_url
+        - state
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+          description: Cognito authorization URL (redirect user here)
+          example: https://rez-agent.auth.us-east-1.amazoncognito.com/oauth2/authorize?client_id=abc123&redirect_uri=https://frontend.example.com/auth/callback&response_type=code&state=random-state-string&scope=openid+email+profile
+        state:
+          type: string
+          description: State parameter (client should validate matches request)
+          example: random-state-string
+
+    CallbackRequest:
+      type: object
+      required:
+        - code
+        - redirect_uri
+      properties:
+        code:
+          type: string
+          description: Authorization code from Cognito redirect
+          example: authorization-code-from-cognito
+        redirect_uri:
+          type: string
+          format: uri
+          description: Redirect URI (must match login request)
+          example: https://frontend.example.com/auth/callback
+
+    RefreshRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          description: Refresh token from previous authentication
+          example: eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ...
+
+    TokenResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: JWT access token (use in Authorization header)
+          example: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+        refresh_token:
+          type: string
+          description: Refresh token (use to get new access token)
+          nullable: true
+          example: eyJjdHkiOiJKV1QiLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiUlNBLU9BRVAifQ...
+        id_token:
+          type: string
+          description: OpenID Connect ID token (contains user claims)
+          nullable: true
+          example: eyJhbGciOiJSUzI1NiIsImtpZCI6IjEyMyJ9...
+        token_type:
+          type: string
+          description: Token type (always "Bearer")
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Access token expiration time (seconds)
+          example: 3600
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+          description: Overall health status
+          example: healthy
+        timestamp:
+          type: string
+          format: date-time
+          description: Health check timestamp
+          example: "2025-10-21T15:00:00Z"
+        version:
+          type: string
+          description: API version
+          example: 1.0.0
+        checks:
+          type: object
+          description: Individual component health checks
+          additionalProperties:
+            type: string
+            enum: [ok, failed, degraded]
+          example:
+            dynamodb: ok
+            sns: ok
+        errors:
+          type: array
+          items:
+            type: string
+          description: Error messages (if unhealthy)
+          nullable: true
+          example:
+            - SNS topic not accessible
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              description: Human-readable error message
+              example: Invalid request parameters
+            details:
+              type: object
+              description: Additional error context
+              additionalProperties: true
+              example:
+                field: stage
+                reason: must be one of [dev, stage, prod]
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Invalid request parameters
+              details:
+                field: stage
+                reason: must be one of [dev, stage, prod]
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: Invalid or expired JWT token
+              details: {}
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          description: Seconds until rate limit resets
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: RATE_LIMIT_EXCEEDED
+              message: Too many requests. Please try again in 60 seconds.
+              details:
+                retry_after: 60
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INTERNAL_SERVER_ERROR
+              message: An unexpected error occurred. Please try again later.
+              details:
+                correlation_id: 660e9500-f39c-52e5-b827-557766551111

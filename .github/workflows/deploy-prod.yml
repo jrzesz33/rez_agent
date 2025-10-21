@@ -1,0 +1,181 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy-to-production" to confirm'
+        required: true
+        type: string
+
+env:
+  PULUMI_STACK: prod
+
+jobs:
+  validate-input:
+    name: Validate Deployment Confirmation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Check confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy-to-production" ]; then
+            echo "❌ Deployment cancelled. You must type 'deploy-to-production' to confirm."
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [validate-input]
+    if: always() && (needs.validate-input.result == 'success' || github.event_name == 'release')
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run Tests
+        run: go test -v -race ./...
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build Lambda Functions
+        run: make build
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set up Pulumi
+        uses: pulumi/actions@v5
+        with:
+          pulumi-version: latest
+
+      - name: Pulumi Login
+        run: pulumi login
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Pulumi Stack Select
+        working-directory: infrastructure
+        run: pulumi stack select ${{ env.PULUMI_STACK }} || pulumi stack init ${{ env.PULUMI_STACK }}
+
+      - name: Pulumi Refresh
+        working-directory: infrastructure
+        run: pulumi refresh --yes
+
+      - name: Pulumi Preview
+        working-directory: infrastructure
+        run: pulumi preview
+
+      - name: Wait for Manual Approval
+        if: github.event_name == 'workflow_dispatch'
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ github.actor }}
+          minimum-approvals: 1
+          issue-title: "Production Deployment Approval Required"
+          issue-body: "Please approve or deny the production deployment"
+
+      - name: Pulumi Up
+        working-directory: infrastructure
+        run: pulumi up --yes
+
+      - name: Get Stack Outputs
+        working-directory: infrastructure
+        id: pulumi-outputs
+        run: |
+          echo "webapi-url=$(pulumi stack output webapiUrl)" >> $GITHUB_OUTPUT
+          echo "alb-dns=$(pulumi stack output albDnsName)" >> $GITHUB_OUTPUT
+
+      - name: Test Deployment
+        run: |
+          WEBAPI_URL="${{ steps.pulumi-outputs.outputs.webapi-url }}"
+          echo "Testing production deployment at: $WEBAPI_URL"
+
+          # Wait for ALB to be ready
+          sleep 60
+
+          # Test health endpoint
+          HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$WEBAPI_URL/api/health" || echo "000")
+
+          if [ "$HEALTH_RESPONSE" = "200" ]; then
+            echo "✅ Production health check passed"
+          else
+            echo "❌ Production health check failed with status: $HEALTH_RESPONSE"
+            echo "🔄 Consider rolling back the deployment"
+            exit 1
+          fi
+
+          # Test metrics endpoint
+          METRICS_RESPONSE=$(curl -s "$WEBAPI_URL/api/metrics")
+          echo "Metrics response: $METRICS_RESPONSE"
+
+      - name: Create Deployment Record
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: 'production',
+              required_contexts: [],
+              auto_merge: false
+            });
+
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              environment_url: '${{ steps.pulumi-outputs.outputs.webapi-url }}',
+              description: 'Production deployment successful'
+            });
+
+      - name: Deployment Summary
+        run: |
+          echo "## 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**WebAPI URL:** ${{ steps.pulumi-outputs.outputs.webapi-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ALB DNS:** ${{ steps.pulumi-outputs.outputs.alb-dns }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Deployed Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed By:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} Production Deployment ${{ job.status }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Production Deployment ${{ job.status }}*\n\n*WebAPI URL:* ${{ steps.pulumi-outputs.outputs.webapi-url }}\n*Deployed By:* ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

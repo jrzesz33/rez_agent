@@ -1,0 +1,900 @@
+# rez_agent Authentication & Authorization
+
+## Overview
+
+This document defines the authentication and authorization strategy for the rez_agent system.
+
+**Security Model**:
+- **Frontend users**: OAuth 2.0 with AWS Cognito (JWT tokens)
+- **Service-to-service**: IAM roles (Lambda execution roles)
+- **API Gateway**: Lambda Authorizer validates JWT tokens
+- **Secrets**: AWS Systems Manager Parameter Store (SecureString)
+
+---
+
+## User Authentication (Web Frontend)
+
+### OAuth 2.0 Authorization Code Flow
+
+**Provider**: AWS Cognito User Pool
+
+**Flow Diagram**:
+```
+┌──────────┐                                  ┌──────────────┐
+│ Frontend │                                  │  Web API     │
+│ (Browser)│                                  │  Lambda      │
+└────┬─────┘                                  └──────┬───────┘
+     │                                                │
+     │ 1. POST /api/auth/login                        │
+     ├───────────────────────────────────────────────>│
+     │                                                │
+     │ 2. Return Cognito authorization URL            │
+     │<───────────────────────────────────────────────┤
+     │                                                │
+     │ 3. Redirect to Cognito login page              │
+     ├────────────────────────┐                       │
+     │                        │                       │
+     │                        ▼                       │
+     │              ┌──────────────────┐              │
+     │              │  AWS Cognito     │              │
+     │              │  Hosted UI       │              │
+     │              └────────┬─────────┘              │
+     │                       │                        │
+     │ 4. User authenticates │                        │
+     │    (username/password)│                        │
+     │◄──────────────────────┤                        │
+     │                       │                        │
+     │ 5. Redirect with auth code                     │
+     │<──────────────────────┘                        │
+     │                                                │
+     │ 6. POST /api/auth/callback (code)              │
+     ├───────────────────────────────────────────────>│
+     │                                                │
+     │                                                │ 7. Exchange code
+     │                                                │    for tokens
+     │                                                ├────────────┐
+     │                                                │            │
+     │                                                │            ▼
+     │                                                │   ┌────────────────┐
+     │                                                │   │ Cognito Token  │
+     │                                                │   │ Endpoint       │
+     │                                                │   └────────┬───────┘
+     │                                                │            │
+     │                                                │◄───────────┘
+     │                                                │
+     │ 8. Return JWT tokens                           │
+     │<───────────────────────────────────────────────┤
+     │                                                │
+     │ 9. Subsequent API calls with JWT              │
+     ├───────────────────────────────────────────────>│
+     │    Authorization: Bearer <access_token>        │
+     │                                                │
+     │                                                │ 10. Validate JWT
+     │                                                │     (Lambda Authorizer)
+     │                                                ├────────────┐
+     │                                                │            │
+     │                                                │◄───────────┘
+     │                                                │
+     │ 11. API response                               │
+     │<───────────────────────────────────────────────┤
+     │                                                │
+```
+
+---
+
+## AWS Cognito Configuration
+
+### User Pool Settings
+
+**User Pool Name**: `rez-agent-users-{stage}`
+
+**Sign-in Options**:
+- Username (email address)
+- Email verification required
+- Password requirements:
+  - Minimum length: 8 characters
+  - Require uppercase, lowercase, numbers, special characters
+  - Password expiration: 90 days
+
+**MFA (Multi-Factor Authentication)**:
+- **dev**: Optional (user choice)
+- **stage/prod**: Optional (recommended, but not enforced initially)
+- **Future**: Enforce MFA for all users
+
+**Account Recovery**:
+- Email-based recovery (send verification code)
+- No SMS (cost optimization)
+
+**User Attributes**:
+- email (required, verified)
+- name (optional)
+- custom:role (custom attribute, future RBAC)
+
+---
+
+### App Client Configuration
+
+**App Client Name**: `rez-agent-web-client-{stage}`
+
+**App Client Settings**:
+- **Client ID**: Generated by Cognito (e.g., `3n4u5v6w7x8y9z`)
+- **Client Secret**: None (public client, no secret)
+- **Authentication flows**:
+  - Authorization code grant (OAuth 2.0 standard)
+  - Refresh token rotation enabled
+- **Token expiration**:
+  - Access token: 1 hour
+  - ID token: 1 hour
+  - Refresh token: 30 days
+- **Scopes**:
+  - openid (OIDC)
+  - email
+  - profile
+  - aws.cognito.signin.user.admin (full user access)
+
+**OAuth 2.0 Settings**:
+- **Allowed Callback URLs**:
+  - dev: `http://localhost:3000/auth/callback`, `https://dev.frontend.example.com/auth/callback`
+  - stage: `https://stage.frontend.example.com/auth/callback`
+  - prod: `https://frontend.example.com/auth/callback`
+- **Allowed Sign-out URLs**:
+  - Same as callback URLs (replace `/callback` with `/logout`)
+- **Allowed OAuth Flows**: Authorization code grant
+- **Allowed OAuth Scopes**: openid, email, profile
+
+---
+
+### Hosted UI Customization (Optional)
+
+**Logo**: rez_agent logo
+**CSS**: Custom branding (primary color, fonts)
+**Domain**: `rez-agent.auth.us-east-1.amazoncognito.com`
+
+**Custom Domain** (future):
+- `auth.rez-agent.example.com` (requires ACM certificate)
+
+---
+
+## JWT Token Structure
+
+### Access Token (JWT)
+
+**Header**:
+```json
+{
+  "alg": "RS256",
+  "kid": "cognito-key-id",
+  "typ": "JWT"
+}
+```
+
+**Payload** (Claims):
+```json
+{
+  "sub": "550e8400-e29b-41d4-a716-446655440000",
+  "cognito:groups": [],
+  "iss": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123",
+  "client_id": "3n4u5v6w7x8y9z",
+  "origin_jti": "origin-jwt-id",
+  "event_id": "event-id",
+  "token_use": "access",
+  "scope": "openid email profile",
+  "auth_time": 1729520400,
+  "exp": 1729524000,
+  "iat": 1729520400,
+  "jti": "jwt-id",
+  "username": "alice@example.com"
+}
+```
+
+**Key Claims**:
+- `sub`: User ID (unique identifier)
+- `username`: Email address
+- `iss`: Issuer (Cognito User Pool)
+- `exp`: Expiration timestamp (Unix)
+- `scope`: OAuth scopes
+
+**Signature**: RS256 (RSA SHA-256) signed by Cognito private key
+
+---
+
+### ID Token (OIDC)
+
+**Payload** (Claims):
+```json
+{
+  "sub": "550e8400-e29b-41d4-a716-446655440000",
+  "cognito:username": "alice@example.com",
+  "email_verified": true,
+  "iss": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123",
+  "cognito:username": "alice@example.com",
+  "origin_jti": "origin-jwt-id",
+  "aud": "3n4u5v6w7x8y9z",
+  "event_id": "event-id",
+  "token_use": "id",
+  "auth_time": 1729520400,
+  "exp": 1729524000,
+  "iat": 1729520400,
+  "email": "alice@example.com",
+  "name": "Alice Smith"
+}
+```
+
+**Use Case**: Frontend displays user info (name, email)
+
+---
+
+### Refresh Token (Opaque)
+
+**Format**: Opaque token (not JWT, encrypted by Cognito)
+
+**Lifetime**: 30 days
+
+**Use Case**: Obtain new access/ID tokens when expired (POST /api/auth/refresh)
+
+---
+
+## Lambda Authorizer (API Gateway)
+
+### Purpose
+
+Validate JWT access tokens before routing requests to Web API Lambda.
+
+**Trigger**: All API Gateway requests (except /health, /auth/*)
+
+**Functionality**:
+1. Extract JWT from `Authorization: Bearer <token>` header
+2. Validate JWT signature (fetch Cognito public keys from JWKS endpoint)
+3. Validate claims (issuer, expiration, audience)
+4. Generate IAM policy (Allow/Deny)
+5. Pass user context to downstream Lambda
+
+---
+
+### Lambda Authorizer Implementation (Go)
+
+**Lambda Function**: `rez-agent-jwt-authorizer-{stage}`
+
+**Go Code**:
+```go
+package main
+
+import (
+	"context"
+	"crypto/rsa"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+const (
+	cognitoIssuer = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123"
+	jwksURL       = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC123/.well-known/jwks.json"
+)
+
+type Handler struct {
+	publicKeys map[string]*rsa.PublicKey
+}
+
+// JWKS represents JSON Web Key Set
+type JWKS struct {
+	Keys []JWK `json:"keys"`
+}
+
+type JWK struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
+func (h *Handler) Authorize(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
+	// Extract token from Authorization header
+	authHeader := event.Headers["Authorization"]
+	if authHeader == "" {
+		authHeader = event.Headers["authorization"]
+	}
+
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		return generatePolicy("user", "Deny", event.MethodArn), errors.New("missing or invalid Authorization header")
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+	// Validate JWT
+	claims, err := h.validateJWT(ctx, tokenString)
+	if err != nil {
+		return generatePolicy("user", "Deny", event.MethodArn), err
+	}
+
+	// Generate Allow policy
+	principalID := claims["username"].(string)
+	return generatePolicy(principalID, "Allow", event.MethodArn, claims), nil
+}
+
+func (h *Handler) validateJWT(ctx context.Context, tokenString string) (jwt.MapClaims, error) {
+	// Fetch JWKS (cache in Lambda globals for reuse)
+	if h.publicKeys == nil {
+		if err := h.fetchJWKS(ctx); err != nil {
+			return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+		}
+	}
+
+	// Parse JWT
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Validate algorithm
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		// Get public key by kid
+		kid, ok := token.Header["kid"].(string)
+		if !ok {
+			return nil, errors.New("missing kid in JWT header")
+		}
+
+		publicKey, ok := h.publicKeys[kid]
+		if !ok {
+			return nil, fmt.Errorf("unknown kid: %s", kid)
+		}
+
+		return publicKey, nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse JWT: %w", err)
+	}
+
+	// Validate claims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid JWT claims")
+	}
+
+	// Validate issuer
+	if claims["iss"] != cognitoIssuer {
+		return nil, fmt.Errorf("invalid issuer: %s", claims["iss"])
+	}
+
+	// Validate expiration
+	exp, ok := claims["exp"].(float64)
+	if !ok || time.Unix(int64(exp), 0).Before(time.Now()) {
+		return nil, errors.New("token expired")
+	}
+
+	// Validate token_use (must be "access")
+	if claims["token_use"] != "access" {
+		return nil, errors.New("invalid token_use (must be access token)")
+	}
+
+	return claims, nil
+}
+
+func (h *Handler) fetchJWKS(ctx context.Context) error {
+	resp, err := http.Get(jwksURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var jwks JWKS
+	if err := json.Unmarshal(body, &jwks); err != nil {
+		return err
+	}
+
+	// Convert JWKs to RSA public keys
+	h.publicKeys = make(map[string]*rsa.PublicKey)
+	for _, key := range jwks.Keys {
+		publicKey, err := jwkToRSAPublicKey(key)
+		if err != nil {
+			return err
+		}
+		h.publicKeys[key.Kid] = publicKey
+	}
+
+	return nil
+}
+
+func jwkToRSAPublicKey(jwk JWK) (*rsa.PublicKey, error) {
+	// Implementation omitted (use github.com/golang-jwt/jwt/v5 JWK parsing)
+	// Convert N and E (base64 encoded) to rsa.PublicKey
+	return nil, nil // Placeholder
+}
+
+func generatePolicy(principalID, effect, resource string, claims ...jwt.MapClaims) events.APIGatewayCustomAuthorizerResponse {
+	policy := events.APIGatewayCustomAuthorizerResponse{
+		PrincipalID: principalID,
+		PolicyDocument: events.APIGatewayCustomAuthorizerPolicy{
+			Version: "2012-10-17",
+			Statement: []events.IAMPolicyStatement{
+				{
+					Action:   []string{"execute-api:Invoke"},
+					Effect:   effect,
+					Resource: []string{resource},
+				},
+			},
+		},
+	}
+
+	// Add user context (passed to downstream Lambda)
+	if len(claims) > 0 && claims[0] != nil {
+		policy.Context = map[string]interface{}{
+			"userId":   claims[0]["sub"],
+			"username": claims[0]["username"],
+			"email":    claims[0]["email"],
+		}
+	}
+
+	return policy
+}
+
+func main() {
+	handler := &Handler{}
+	lambda.Start(handler.Authorize)
+}
+```
+
+**Environment Variables**:
+- `COGNITO_USER_POOL_ID`: us-east-1_ABC123
+- `COGNITO_REGION`: us-east-1
+
+**IAM Permissions**:
+- None (read-only JWKS endpoint is public)
+
+**Caching**:
+- Cache JWKS in Lambda global variables (avoid refetching on every request)
+- Refresh every 24 hours or on validation failure
+
+---
+
+### API Gateway Integration
+
+**API Gateway Type**: HTTP API (simpler, cheaper than REST API)
+
+**Authorizer Configuration**:
+- **Type**: Lambda Authorizer (REQUEST type)
+- **Lambda ARN**: arn:aws:lambda:us-east-1:123456789012:function:rez-agent-jwt-authorizer-dev
+- **Identity Source**: `$request.header.Authorization`
+- **Result TTL**: 300 seconds (5 minutes) - cache authorization decision
+- **Enable Simple Responses**: No (use IAM policy format)
+
+**Routes with Authorizer**:
+- `GET /api/messages` (requires auth)
+- `POST /api/messages` (requires auth)
+- `GET /api/messages/{message_id}` (requires auth)
+- `GET /api/metrics` (requires auth)
+- `POST /api/auth/refresh` (no auth - uses refresh token)
+
+**Routes without Authorizer**:
+- `GET /api/health` (public)
+- `POST /api/auth/login` (public)
+- `GET /api/auth/callback` (public)
+
+---
+
+## Service-to-Service Authentication (IAM Roles)
+
+### Lambda Execution Roles
+
+Each Lambda has a dedicated IAM role with least-privilege permissions.
+
+#### Scheduler Lambda Role
+
+**Role Name**: `rez-agent-scheduler-role-{stage}`
+
+**Permissions**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/rez-agent-messages-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:123456789012:rez-agent-messages-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/rez-agent-scheduler-dev:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+#### Web API Lambda Role
+
+**Role Name**: `rez-agent-web-api-role-{stage}`
+
+**Permissions**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/rez-agent-messages-dev",
+        "arn:aws:dynamodb:us-east-1:123456789012:table/rez-agent-messages-dev/index/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:123456789012:rez-agent-messages-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter"
+      ],
+      "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/rez-agent/dev/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/rez-agent-web-api-dev:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+#### Message Processor Lambda Role
+
+**Role Name**: `rez-agent-message-processor-role-{stage}`
+
+**Permissions**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "arn:aws:sqs:us-east-1:123456789012:rez-agent-message-queue-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/rez-agent-messages-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:rez-agent-notification-service-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/rez-agent-message-processor-dev:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+#### Notification Service Lambda Role
+
+**Role Name**: `rez-agent-notification-service-role-{stage}`
+
+**Permissions**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter"
+      ],
+      "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/rez-agent/dev/ntfy-api-key"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/rez-agent-circuit-breaker-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/rez-agent-notification-service-dev:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+## Secrets Management
+
+### AWS Systems Manager Parameter Store
+
+**Parameter Hierarchy**:
+```
+/rez-agent/{stage}/cognito-client-id (String)
+/rez-agent/{stage}/cognito-user-pool-id (String)
+/rez-agent/{stage}/ntfy-api-key (SecureString, KMS encrypted)
+/rez-agent/{stage}/ntfy-url (String)
+```
+
+**Example**:
+- `/rez-agent/dev/cognito-client-id` = `3n4u5v6w7x8y9z`
+- `/rez-agent/dev/ntfy-api-key` = `ntfy_abc123xyz` (encrypted)
+- `/rez-agent/dev/ntfy-url` = `https://ntfy.sh/rez-agent-dev`
+
+**Access Pattern** (Go):
+```go
+import (
+	"context"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+)
+
+func getParameter(ctx context.Context, ssmClient *ssm.Client, name string) (string, error) {
+	result, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String(name),
+		WithDecryption: aws.Bool(true), // Decrypt SecureString
+	})
+	if err != nil {
+		return "", err
+	}
+	return *result.Parameter.Value, nil
+}
+
+// Usage
+ntfyAPIKey, err := getParameter(ctx, ssmClient, "/rez-agent/dev/ntfy-api-key")
+```
+
+**Benefits**:
+- **Encryption**: KMS encryption for sensitive values
+- **Access Control**: IAM policies restrict access per Lambda
+- **Audit Trail**: CloudTrail logs parameter access
+- **Versioning**: Track parameter changes
+
+**Alternative**: AWS Secrets Manager (higher cost, auto-rotation for DB credentials)
+
+---
+
+## Authorization (RBAC - Future)
+
+### Current State (MVP)
+
+**Authorization**: All authenticated users have full access (no role-based restrictions)
+
+**Reason**: Single-user or small team initially
+
+### Future Enhancement: Role-Based Access Control (RBAC)
+
+**Roles**:
+- **admin**: Full access (create messages, view all, manage users)
+- **user**: View messages, create manual messages
+- **viewer**: Read-only (view messages, metrics)
+
+**Implementation**:
+1. Add `custom:role` attribute to Cognito user profile
+2. Include role in JWT claims (via Cognito Pre-Token Generation Lambda trigger)
+3. Lambda Authorizer extracts role and passes to downstream Lambda
+4. Web API Lambda enforces role-based permissions
+
+**Example** (Go):
+```go
+func (h *Handler) ListMessages(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	// Extract role from authorizer context
+	role := event.RequestContext.Authorizer["role"].(string)
+
+	// Enforce role-based filter
+	if role == "viewer" {
+		// Viewer can only see their own messages
+		createdBy := event.RequestContext.Authorizer["username"].(string)
+		// Apply filter: created_by = createdBy
+	}
+
+	// Admin and user: see all messages
+	// ...
+}
+```
+
+---
+
+## Security Best Practices
+
+### Token Storage (Frontend)
+
+**Access Token**: Store in memory (React state, not localStorage)
+- **Reason**: XSS protection (localStorage vulnerable to XSS)
+
+**Refresh Token**: Store in httpOnly cookie (if backend sets cookie)
+- **Alternative**: Store in memory and re-authenticate on page refresh
+
+**ID Token**: Store in memory (for user info display)
+
+### HTTPS Only
+
+**All environments**: Enforce HTTPS (ALB, CloudFront)
+- **HSTS header**: `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+
+### CORS Configuration
+
+**API Gateway CORS**:
+```yaml
+AllowedOrigins:
+  - https://frontend.example.com (prod)
+  - https://dev.frontend.example.com (dev)
+  - http://localhost:3000 (dev)
+AllowedMethods: [GET, POST, PUT, DELETE, OPTIONS]
+AllowedHeaders: [Authorization, Content-Type, X-Correlation-ID]
+AllowCredentials: true
+MaxAge: 3600
+```
+
+### Rate Limiting
+
+**API Gateway Throttling**:
+- **dev**: 100 requests/second per IP
+- **stage**: 500 requests/second per IP
+- **prod**: 1000 requests/second per IP (with burst: 2000)
+
+**Per-user rate limiting** (future): Track by `sub` claim, store in DynamoDB
+
+### Token Revocation (Future)
+
+**Use Case**: User logout, account compromise
+
+**Implementation**:
+1. Store revoked tokens in DynamoDB (token_id, expiration)
+2. Lambda Authorizer checks revocation list before allowing access
+3. TTL on revoked tokens (delete after expiration)
+
+**Alternative**: Short-lived access tokens (1 hour) + refresh token rotation
+
+---
+
+## Testing Authentication
+
+### Unit Tests (Lambda Authorizer)
+
+```go
+func TestValidateJWT_ValidToken(t *testing.T) {
+	handler := &Handler{}
+	// Mock JWKS
+	handler.publicKeys = mockPublicKeys()
+
+	validToken := generateTestJWT()
+	claims, err := handler.validateJWT(context.Background(), validToken)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "alice@example.com", claims["username"])
+}
+
+func TestValidateJWT_ExpiredToken(t *testing.T) {
+	handler := &Handler{}
+	handler.publicKeys = mockPublicKeys()
+
+	expiredToken := generateExpiredTestJWT()
+	_, err := handler.validateJWT(context.Background(), expiredToken)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "token expired")
+}
+```
+
+### Integration Tests
+
+**Test Flow**:
+1. Create test user in Cognito (via AWS SDK)
+2. Authenticate programmatically (username/password)
+3. Obtain JWT token
+4. Send API request with token
+5. Verify 200 response
+
+**Cleanup**: Delete test user after test
+
+---
+
+## Summary
+
+The rez_agent authentication and authorization strategy provides:
+
+1. **Secure OAuth 2.0 flow**: AWS Cognito with authorization code grant
+2. **JWT validation**: Lambda Authorizer verifies tokens before API access
+3. **Least-privilege IAM**: Service-to-service auth with dedicated roles
+4. **Secrets management**: Parameter Store for API keys and config
+5. **Extensibility**: RBAC support for future role-based permissions
+6. **Best practices**: HTTPS, CORS, rate limiting, token storage recommendations
+
+This design balances security, simplicity, and AWS-native integration for a serverless architecture.

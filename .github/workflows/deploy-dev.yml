@@ -1,0 +1,110 @@
+name: Deploy to Dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PULUMI_STACK: dev
+
+jobs:
+  deploy:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build Lambda Functions
+        run: make build
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set up Pulumi
+        uses: pulumi/actions@v5
+        with:
+          pulumi-version: latest
+
+      - name: Pulumi Login
+        run: pulumi login
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Pulumi Stack Select
+        working-directory: infrastructure
+        run: pulumi stack select ${{ env.PULUMI_STACK }} || pulumi stack init ${{ env.PULUMI_STACK }}
+
+      - name: Pulumi Refresh
+        working-directory: infrastructure
+        run: pulumi refresh --yes
+
+      - name: Pulumi Preview
+        working-directory: infrastructure
+        run: pulumi preview
+
+      - name: Pulumi Up
+        working-directory: infrastructure
+        run: pulumi up --yes
+
+      - name: Get Stack Outputs
+        working-directory: infrastructure
+        id: pulumi-outputs
+        run: |
+          echo "webapi-url=$(pulumi stack output webapiUrl)" >> $GITHUB_OUTPUT
+          echo "alb-dns=$(pulumi stack output albDnsName)" >> $GITHUB_OUTPUT
+
+      - name: Test Deployment
+        run: |
+          WEBAPI_URL="${{ steps.pulumi-outputs.outputs.webapi-url }}"
+          echo "Testing deployment at: $WEBAPI_URL"
+
+          # Wait for ALB to be ready
+          sleep 30
+
+          # Test health endpoint
+          HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$WEBAPI_URL/api/health" || echo "000")
+
+          if [ "$HEALTH_RESPONSE" = "200" ]; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check failed with status: $HEALTH_RESPONSE"
+            exit 1
+          fi
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### 🚀 Deployed to Development\n\n**WebAPI URL:** ${{ steps.pulumi-outputs.outputs.webapi-url }}\n**ALB DNS:** ${{ steps.pulumi-outputs.outputs.alb-dns }}\n\nHealth check: ✅ Passing`
+            })
+
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Development" >> $GITHUB_STEP_SUMMARY
+          echo "**WebAPI URL:** ${{ steps.pulumi-outputs.outputs.webapi-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ALB DNS:** ${{ steps.pulumi-outputs.outputs.alb-dns }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Deployed Successfully" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,83 @@
+# Example Pulumi stack configuration
+# Copy this file to Pulumi.{stack}.yaml and customize for your environment
+
+config:
+  # AWS Configuration
+  aws:region: us-east-1                        # AWS region for deployment
+
+  # rez_agent Configuration
+  rez-agent-infrastructure:stage: dev          # Environment stage (dev, staging, prod)
+  rez-agent-infrastructure:ntfyUrl: https://ntfy.sh/rzesz-alerts  # ntfy.sh notification URL
+  rez-agent-infrastructure:logRetentionDays: 7 # CloudWatch log retention in days
+  rez-agent-infrastructure:enableXRay: true    # Enable AWS X-Ray tracing
+  rez-agent-infrastructure:schedulerCron: "cron(0 12 * * ? *)"  # EventBridge cron expression (daily at 12:00 UTC)
+
+# Configuration Examples:
+
+# Development Environment
+# ----------------------
+# aws:region: us-east-1
+# stage: dev
+# ntfyUrl: https://ntfy.sh/rzesz-alerts-dev
+# logRetentionDays: 7
+# enableXRay: true
+# schedulerCron: "cron(0 12 * * ? *)"  # Daily at noon UTC
+
+# Staging Environment
+# -------------------
+# aws:region: us-east-1
+# stage: staging
+# ntfyUrl: https://ntfy.sh/rzesz-alerts-staging
+# logRetentionDays: 14
+# enableXRay: true
+# schedulerCron: "cron(0 12 * * ? *)"  # Daily at noon UTC
+
+# Production Environment
+# ----------------------
+# aws:region: us-east-1
+# stage: prod
+# ntfyUrl: https://ntfy.sh/rzesz-alerts
+# logRetentionDays: 30
+# enableXRay: true
+# schedulerCron: "cron(0 12 * * ? *)"  # Daily at noon UTC
+
+# Cron Expression Examples:
+# -------------------------
+# "cron(0 12 * * ? *)"        # Every day at 12:00 UTC
+# "cron(0 8 * * ? *)"         # Every day at 08:00 UTC
+# "cron(0 0 * * ? *)"         # Every day at midnight UTC
+# "cron(0 */6 * * ? *)"       # Every 6 hours
+# "cron(0 12 ? * MON *)"      # Every Monday at 12:00 UTC
+# "cron(0 12 1 * ? *)"        # First day of month at 12:00 UTC
+# "cron(0 12 * * ? * 2025)"   # Every day at 12:00 UTC in 2025
+
+# Multi-Region Deployment:
+# -----------------------
+# For multi-region deployments, create separate stacks:
+#
+# pulumi stack init us-east-1-prod
+# pulumi config set aws:region us-east-1
+# pulumi config set stage prod
+#
+# pulumi stack init us-west-2-prod
+# pulumi config set aws:region us-west-2
+# pulumi config set stage prod
+
+# Environment-Specific Settings:
+# ------------------------------
+#
+# Development:
+# - Lower log retention (7 days)
+# - More frequent testing schedules
+# - Smaller Lambda memory allocations
+#
+# Staging:
+# - Medium log retention (14 days)
+# - Production-like configuration
+# - Same schedule as production
+#
+# Production:
+# - Longer log retention (30 days)
+# - Higher Lambda memory for performance
+# - Production schedule
+# - Consider Reserved Concurrency for predictable performance

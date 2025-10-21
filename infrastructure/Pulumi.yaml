@@ -1,0 +1,6 @@
+name: rez-agent-infrastructure
+runtime:
+  name: go
+  options:
+    binary: pulumi-rez-agent
+description: Infrastructure as Code for rez_agent event-driven messaging system

@@ -1,0 +1,51 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# Build directory
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+*.local
+
+# Pulumi
+.pulumi/
+infrastructure/Pulumi.*.yaml.bak
+infrastructure/*.state
+infrastructure/*.state.backup
+infrastructure/pulumi-rez-agent
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+go.sum

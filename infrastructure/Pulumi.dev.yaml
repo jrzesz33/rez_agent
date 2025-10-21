@@ -1,0 +1,7 @@
+config:
+  aws:region: us-east-1
+  rez-agent-infrastructure:stage: dev
+  rez-agent-infrastructure:ntfyUrl: https://ntfy.sh/rzesz-alerts
+  rez-agent-infrastructure:logRetentionDays: 7
+  rez-agent-infrastructure:enableXRay: true
+  rez-agent-infrastructure:schedulerCron: "cron(0 12 * * ? *)"

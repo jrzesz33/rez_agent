@@ -10,7 +10,7 @@ The infrastructure provisions a complete serverless architecture on AWS for the 
 - **SNS/SQS**: Event-driven messaging with dead letter queue
 - **Lambda Functions**: Three serverless compute functions (Scheduler, Processor, WebAPI)
 - **EventBridge**: Scheduled triggers for daily message creation
-- **Application Load Balancer**: HTTP endpoint for WebAPI Lambda
+- **API Gateway HTTP API**: Serverless HTTP endpoint for WebAPI Lambda
 - **CloudWatch**: Logging, metrics, and alarms
 - **IAM**: Fine-grained permissions for each component
 - **Systems Manager**: Parameter Store for configuration
@@ -54,8 +54,7 @@ The infrastructure provisions a complete serverless architecture on AWS for the 
    - SNS/SQS (create topics and queues)
    - EventBridge (create rules and schedules)
    - CloudWatch (create log groups and alarms)
-   - EC2 (for VPC and security groups for ALB)
-   - Elastic Load Balancing (create ALBs and target groups)
+   - API Gateway v2 (create HTTP APIs, routes, integrations, stages)
    - Systems Manager (create parameters)
 
 ### Pulumi Backend
@@ -103,7 +102,7 @@ pulumi login s3://your-bucket-name
 │                                    ▼                              │
 │                           ntfy.sh (HTTP)                          │
 │                                                                   │
-│  HTTP Client ──► ALB ──► WebAPI Lambda ──► DynamoDB/SNS          │
+│  HTTP Client ──► API Gateway ──► WebAPI Lambda ──► DynamoDB/SNS  │
 │                                                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -114,7 +113,7 @@ pulumi login s3://your-bucket-name
 |----------|---------|---------|--------|---------|
 | Scheduler | EventBridge (cron) | 60s | 256MB | Create scheduled messages |
 | Processor | SQS (batch=10) | 300s | 512MB | Process messages, send to ntfy.sh |
-| WebAPI | ALB (HTTP) | 30s | 256MB | REST API for frontend |
+| WebAPI | API Gateway HTTP | 30s | 256MB | REST API for frontend |
 
 ### DynamoDB Schema
 
@@ -190,15 +189,16 @@ make infra-outputs
 # - dynamodbTableName: rez-agent-messages-dev
 # - snsTopicArn: arn:aws:sns:...
 # - sqsQueueUrl: https://sqs.us-east-1.amazonaws.com/...
-# - albDnsName: rez-agent-alb-dev-123456789.us-east-1.elb.amazonaws.com
-# - webapiUrl: http://rez-agent-alb-dev-123456789.us-east-1.elb.amazonaws.com
+# - apiGatewayId: abc123xyz
+# - apiGatewayEndpoint: https://abc123xyz.execute-api.us-east-1.amazonaws.com
+# - webapiUrl: https://abc123xyz.execute-api.us-east-1.amazonaws.com
 ```
 
 ### 6. Test the System
 
 ```bash
 # Test WebAPI health endpoint
-curl http://$(pulumi stack output webapiUrl --cwd infrastructure)/api/health
+curl $(pulumi stack output webapiUrl --cwd infrastructure)/api/health
 
 # Watch Lambda logs
 make lambda-logs-scheduler  # In one terminal
@@ -447,20 +447,23 @@ make clean
 make build
 ```
 
-#### 4. ALB Health Check Fails
+#### 4. API Gateway 403 Forbidden
 
-**Problem**: Target group shows unhealthy targets
+**Problem**: API Gateway returns 403 Forbidden
 
 **Solution**:
 ```bash
-# Verify WebAPI health endpoint
-curl http://$(pulumi stack output webapiUrl --cwd infrastructure)/api/health
-
-# Check Lambda logs
-make lambda-logs-webapi
-
-# Verify Lambda permissions
+# Verify Lambda permissions for API Gateway
 aws lambda get-policy --function-name rez-agent-webapi-dev
+
+# Check if permission exists for apigateway.amazonaws.com
+# Should see a statement with Principal: {"Service": "apigateway.amazonaws.com"}
+
+# Test API endpoint
+curl $(pulumi stack output webapiUrl --cwd infrastructure)/api/health
+
+# Check API Gateway logs
+aws logs tail /aws/lambda/rez-agent-webapi-dev --follow
 ```
 
 #### 5. EventBridge Not Triggering Scheduler
@@ -527,68 +530,40 @@ pulumi up -v=3
 | DynamoDB | 1GB storage + 100K reads/writes | $0.37 |
 | SNS | 30,000 requests | $0.00 |
 | SQS | 30,000 requests | $0.00 |
-| ALB | 720 hours + data processing | $16.20 |
+| API Gateway HTTP | 10,000 requests | $0.01 |
 | CloudWatch Logs | 1GB ingestion + 1GB storage | $0.50 |
 | CloudWatch Alarms | 2 alarms | $0.20 |
-| **Total** | | **~$18.23/month** |
+| **Total** | | **~$2.04/month** |
 
 **Note**: Actual costs may vary. Use AWS Cost Explorer for precise tracking.
 
 **Cost Optimization Tips**:
-- Use API Gateway instead of ALB for lower traffic (~$3.50/month vs $16.20)
+- API Gateway HTTP API is significantly cheaper than ALB (~$0.01/10K requests vs $16.20/month base)
 - Reduce log retention (7 days in dev)
 - Enable X-Ray sampling (5% instead of 100%)
 - Use Reserved Concurrency only if needed
 
-## API Gateway Alternative
+## API Gateway Features
 
-To use API Gateway instead of ALB (lower cost for low traffic):
+The infrastructure uses **API Gateway HTTP API** which provides:
 
-1. Edit `main.go` and replace the ALB section with:
+- **Low Cost**: Pay-per-request pricing (~$1 per million requests)
+- **Automatic Scaling**: Handles traffic spikes automatically
+- **Built-in Logging**: Access logs to CloudWatch
+- **Lambda Proxy Integration**: Automatic request/response mapping
+- **Default Route**: Catch-all route (`$default`) forwards all requests to WebAPI Lambda
 
-```go
-// API Gateway (HTTP API)
-api, err := apigatewayv2.NewApi(ctx, fmt.Sprintf("rez-agent-api-%s", stage), &apigatewayv2.ApiArgs{
-    Name:         pulumi.String(fmt.Sprintf("rez-agent-api-%s", stage)),
-    ProtocolType: pulumi.String("HTTP"),
-    CorsConfiguration: &apigatewayv2.ApiCorsConfigurationArgs{
-        AllowOrigins: pulumi.StringArray{pulumi.String("*")},
-        AllowMethods: pulumi.StringArray{pulumi.String("*")},
-        AllowHeaders: pulumi.StringArray{pulumi.String("*")},
-    },
-})
+### Access Logs
 
-// API Gateway Integration
-integration, err := apigatewayv2.NewIntegration(ctx, fmt.Sprintf("rez-agent-api-integration-%s", stage), &apigatewayv2.IntegrationArgs{
-    ApiId:           api.ID(),
-    IntegrationType: pulumi.String("AWS_PROXY"),
-    IntegrationUri:  webapiLambda.Arn,
-})
-
-// API Gateway Route
-_, err = apigatewayv2.NewRoute(ctx, fmt.Sprintf("rez-agent-api-route-%s", stage), &apigatewayv2.RouteArgs{
-    ApiId:    api.ID(),
-    RouteKey: pulumi.String("$default"),
-    Target:   integration.ID().ApplyT(func(id string) string {
-        return fmt.Sprintf("integrations/%s", id)
-    }).(pulumi.StringOutput),
-})
-
-// API Gateway Stage
-stage, err := apigatewayv2.NewStage(ctx, fmt.Sprintf("rez-agent-api-stage-%s", stage), &apigatewayv2.StageArgs{
-    ApiId:      api.ID(),
-    Name:       pulumi.String("$default"),
-    AutoDeploy: pulumi.Bool(true),
-})
-
-// Export API URL
-ctx.Export("apiUrl", stage.InvokeUrl)
-```
-
-2. Redeploy:
-```bash
-make deploy-dev
-```
+API Gateway access logs are automatically sent to the WebAPI CloudWatch log group and include:
+- Request ID
+- Source IP
+- Request time
+- HTTP method
+- Route key
+- Status code
+- Protocol
+- Response length
 
 ## Security Considerations
 
@@ -606,9 +581,10 @@ Each Lambda function has its own IAM role with minimal permissions:
 
 ### Network Security
 
-- ALB Security Group: Allow HTTP (80) from 0.0.0.0/0
-- Future: Add HTTPS (443) with ACM certificate
-- Future: VPC endpoints for AWS services (no internet gateway)
+- API Gateway is publicly accessible (managed by AWS)
+- Lambda functions are not in VPC (no VPC configuration required)
+- Future: Add custom domain with ACM certificate for HTTPS
+- Future: Use Lambda in VPC with VPC endpoints for AWS services
 
 ### Encryption
 

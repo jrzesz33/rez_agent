@@ -3,12 +3,11 @@ package main
 import (
 	"fmt"
 
+	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/apigatewayv2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/cloudwatch"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/dynamodb"
-	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/iam"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/lambda"
-	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/lb"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/scheduler"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/sns"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/sqs"
@@ -424,9 +423,9 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/scheduler.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE": messagesTable.Name,
-					"SNS_TOPIC_ARN":  messagesTopic.Arn,
-					"STAGE":          pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME": messagesTable.Name,
+					"SNS_TOPIC_ARN":       messagesTopic.Arn,
+					"STAGE":               pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -449,9 +448,11 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/processor.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE": messagesTable.Name,
-					"NTFY_URL":       pulumi.String(ntfyUrl),
-					"STAGE":          pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME": messagesTable.Name,
+					"SNS_TOPIC_ARN":       messagesTopic.Arn,
+					"SQS_QUEUE_URL":       messagesQueue.Url,
+					"NTFY_URL":            pulumi.String(ntfyUrl),
+					"STAGE":               pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(512),
@@ -485,9 +486,10 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/webapi.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE": messagesTable.Name,
-					"SNS_TOPIC_ARN":  messagesTopic.Arn,
-					"STAGE":          pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME": messagesTable.Name,
+					"SNS_TOPIC_ARN":       messagesTopic.Arn,
+					"SQS_QUEUE_URL":       messagesQueue.Url,
+					"STAGE":               pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -501,120 +503,68 @@ func main() {
 			return err
 		}
 
-		// Lambda permission for ALB to invoke WebAPI
-		_, err = lambda.NewPermission(ctx, fmt.Sprintf("rez-agent-webapi-alb-permission-%s", stage), &lambda.PermissionArgs{
+		// ========================================
+		// API Gateway HTTP API
+		// ========================================
+
+		// API Gateway HTTP API
+		httpApi, err := apigatewayv2.NewApi(ctx, fmt.Sprintf("rez-agent-api-%s", stage), &apigatewayv2.ApiArgs{
+			Name:         pulumi.String(fmt.Sprintf("rez-agent-api-%s", stage)),
+			ProtocolType: pulumi.String("HTTP"),
+			Description:  pulumi.String("HTTP API for rez-agent web interface"),
+			Tags:         commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Lambda permission for API Gateway to invoke WebAPI
+		_, err = lambda.NewPermission(ctx, fmt.Sprintf("rez-agent-webapi-apigw-permission-%s", stage), &lambda.PermissionArgs{
 			Action:    pulumi.String("lambda:InvokeFunction"),
 			Function:  webapiLambda.Name,
-			Principal: pulumi.String("elasticloadbalancing.amazonaws.com"),
+			Principal: pulumi.String("apigateway.amazonaws.com"),
+			SourceArn: httpApi.ExecutionArn.ApplyT(func(arn string) string {
+				return fmt.Sprintf("%s/*/*", arn)
+			}).(pulumi.StringOutput),
 		})
 		if err != nil {
 			return err
 		}
 
-		// ========================================
-		// Application Load Balancer
-		// ========================================
-
-		// Get default VPC
-		defaultVpc, err := ec2.LookupVpc(ctx, &ec2.LookupVpcArgs{
-			Default: pulumi.BoolRef(true),
+		// API Gateway Integration
+		httpApiIntegration, err := apigatewayv2.NewIntegration(ctx, fmt.Sprintf("rez-agent-api-integration-%s", stage), &apigatewayv2.IntegrationArgs{
+			ApiId:                httpApi.ID(),
+			IntegrationType:      pulumi.String("AWS_PROXY"),
+			IntegrationUri:       webapiLambda.Arn,
+			IntegrationMethod:    pulumi.String("POST"),
+			PayloadFormatVersion: pulumi.String("2.0"),
 		})
 		if err != nil {
 			return err
 		}
 
-		// Get subnets in default VPC
-		subnets, err := ec2.GetSubnets(ctx, &ec2.GetSubnetsArgs{
-			Filters: []ec2.GetSubnetsFilter{
-				{
-					Name:   "vpc-id",
-					Values: []string{defaultVpc.Id},
-				},
-			},
+		// API Gateway Route (catch-all)
+		_, err = apigatewayv2.NewRoute(ctx, fmt.Sprintf("rez-agent-api-route-%s", stage), &apigatewayv2.RouteArgs{
+			ApiId:    httpApi.ID(),
+			RouteKey: pulumi.String("$default"),
+			Target: httpApiIntegration.ID().ApplyT(func(id string) string {
+				return fmt.Sprintf("integrations/%s", id)
+			}).(pulumi.StringOutput),
 		})
 		if err != nil {
 			return err
 		}
 
-		// Security Group for ALB
-		albSecurityGroup, err := ec2.NewSecurityGroup(ctx, fmt.Sprintf("rez-agent-alb-sg-%s", stage), &ec2.SecurityGroupArgs{
-			Name:        pulumi.String(fmt.Sprintf("rez-agent-alb-sg-%s", stage)),
-			Description: pulumi.String("Security group for rez-agent ALB"),
-			VpcId:       pulumi.String(defaultVpc.Id),
-			Ingress: ec2.SecurityGroupIngressArray{
-				&ec2.SecurityGroupIngressArgs{
-					Protocol:   pulumi.String("tcp"),
-					FromPort:   pulumi.Int(80),
-					ToPort:     pulumi.Int(80),
-					CidrBlocks: pulumi.StringArray{pulumi.String("0.0.0.0/0")},
-				},
-			},
-			Egress: ec2.SecurityGroupEgressArray{
-				&ec2.SecurityGroupEgressArgs{
-					Protocol:   pulumi.String("-1"),
-					FromPort:   pulumi.Int(0),
-					ToPort:     pulumi.Int(0),
-					CidrBlocks: pulumi.StringArray{pulumi.String("0.0.0.0/0")},
-				},
+		// API Gateway Stage (auto-deploy)
+		_, err = apigatewayv2.NewStage(ctx, fmt.Sprintf("rez-agent-api-stage-%s", stage), &apigatewayv2.StageArgs{
+			ApiId:      httpApi.ID(),
+			Name:       pulumi.String("$default"),
+			AutoDeploy: pulumi.Bool(true),
+			AccessLogSettings: &apigatewayv2.StageAccessLogSettingsArgs{
+				DestinationArn: webapiLogGroup.Arn,
+				Format:         pulumi.String(`{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength"}`),
 			},
 			Tags: commonTags,
-		})
-		if err != nil {
-			return err
-		}
-
-		// Application Load Balancer
-		alb, err := lb.NewLoadBalancer(ctx, fmt.Sprintf("rez-agent-alb-%s", stage), &lb.LoadBalancerArgs{
-			Name:             pulumi.String(fmt.Sprintf("rez-agent-alb-%s", stage)),
-			Internal:         pulumi.Bool(false),
-			LoadBalancerType: pulumi.String("application"),
-			SecurityGroups:   pulumi.StringArray{albSecurityGroup.ID()},
-			Subnets:          toPulumiStringArray(subnets.Ids),
-			Tags:             commonTags,
-		})
-		if err != nil {
-			return err
-		}
-
-		// Target Group for WebAPI Lambda
-		webapiTargetGroup, err := lb.NewTargetGroup(ctx, fmt.Sprintf("rez-agent-webapi-tg-%s", stage), &lb.TargetGroupArgs{
-			Name:       pulumi.String(fmt.Sprintf("rez-agent-webapi-tg-%s", stage)),
-			TargetType: pulumi.String("lambda"),
-			HealthCheck: &lb.TargetGroupHealthCheckArgs{
-				Enabled:            pulumi.Bool(true),
-				Path:               pulumi.String("/api/health"),
-				Matcher:            pulumi.String("200"),
-				Interval:           pulumi.Int(30),
-				Timeout:            pulumi.Int(5),
-				HealthyThreshold:   pulumi.Int(2),
-				UnhealthyThreshold: pulumi.Int(2),
-			},
-			Tags: commonTags,
-		})
-		if err != nil {
-			return err
-		}
-
-		// Attach WebAPI Lambda to Target Group
-		_, err = lb.NewTargetGroupAttachment(ctx, fmt.Sprintf("rez-agent-webapi-tg-attachment-%s", stage), &lb.TargetGroupAttachmentArgs{
-			TargetGroupArn: webapiTargetGroup.Arn,
-			TargetId:       webapiLambda.Arn,
-		})
-		if err != nil {
-			return err
-		}
-
-		// ALB Listener
-		_, err = lb.NewListener(ctx, fmt.Sprintf("rez-agent-alb-listener-%s", stage), &lb.ListenerArgs{
-			LoadBalancerArn: alb.Arn,
-			Port:            pulumi.Int(80),
-			Protocol:        pulumi.String("HTTP"),
-			DefaultActions: lb.ListenerDefaultActionArray{
-				&lb.ListenerDefaultActionArgs{
-					Type:           pulumi.String("forward"),
-					TargetGroupArn: webapiTargetGroup.Arn,
-				},
-			},
 		})
 		if err != nil {
 			return err
@@ -736,21 +686,10 @@ func main() {
 		ctx.Export("schedulerLambdaArn", schedulerLambda.Arn)
 		ctx.Export("processorLambdaArn", processorLambda.Arn)
 		ctx.Export("webapiLambdaArn", webapiLambda.Arn)
-		ctx.Export("albDnsName", alb.DnsName)
-		ctx.Export("albArn", alb.Arn)
-		ctx.Export("webapiUrl", alb.DnsName.ApplyT(func(dns string) string {
-			return fmt.Sprintf("http://%s", dns)
-		}).(pulumi.StringOutput))
+		ctx.Export("apiGatewayId", httpApi.ID())
+		ctx.Export("apiGatewayEndpoint", httpApi.ApiEndpoint)
+		ctx.Export("webapiUrl", httpApi.ApiEndpoint)
 
 		return nil
 	})
-}
-
-// Helper function to convert []string to pulumi.StringArray
-func toPulumiStringArray(strs []string) pulumi.StringArray {
-	result := make(pulumi.StringArray, len(strs))
-	for i, s := range strs {
-		result[i] = pulumi.String(s)
-	}
-	return result
 }

@@ -44,11 +44,11 @@ func NewWebAPIHandler(
 	}
 }
 
-// HandleRequest routes API Gateway requests to appropriate handlers
-func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+// HandleRequest routes API Gateway V2 requests to appropriate handlers
+func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	h.logger.InfoContext(ctx, "received API request",
-		slog.String("method", request.HTTPMethod),
-		slog.String("path", request.Path),
+		slog.String("method", request.RequestContext.HTTP.Method),
+		slog.String("path", request.RawPath),
 	)
 
 	// Add CORS headers
@@ -60,25 +60,31 @@ func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGat
 	}
 
 	// Handle OPTIONS for CORS preflight
-	if request.HTTPMethod == "OPTIONS" {
-		return events.APIGatewayProxyResponse{
+	if request.RequestContext.HTTP.Method == "OPTIONS" {
+		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusOK,
 			Headers:    headers,
 		}, nil
 	}
 
 	// Route requests
-	var response events.APIGatewayProxyResponse
+	var response events.APIGatewayV2HTTPResponse
 	var err error
 
+	path := request.RawPath
+	if path == "" {
+		path = request.RequestContext.HTTP.Path
+	}
+	method := request.RequestContext.HTTP.Method
+
 	switch {
-	case request.Path == "/api/health" && request.HTTPMethod == "GET":
+	case path == "/api/health" && method == "GET":
 		response, err = h.handleHealth(ctx)
-	case request.Path == "/api/messages" && request.HTTPMethod == "GET":
+	case path == "/api/messages" && method == "GET":
 		response, err = h.handleListMessages(ctx, request)
-	case request.Path == "/api/messages" && request.HTTPMethod == "POST":
+	case path == "/api/messages" && method == "POST":
 		response, err = h.handleCreateMessage(ctx, request)
-	case request.Path == "/api/metrics" && request.HTTPMethod == "GET":
+	case path == "/api/metrics" && method == "GET":
 		response, err = h.handleMetrics(ctx)
 	default:
 		response = h.createErrorResponse(http.StatusNotFound, "endpoint not found")
@@ -103,7 +109,7 @@ func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGat
 }
 
 // handleHealth returns the health status of the API
-func (h *WebAPIHandler) handleHealth(ctx context.Context) (events.APIGatewayProxyResponse, error) {
+func (h *WebAPIHandler) handleHealth(ctx context.Context) (events.APIGatewayV2HTTPResponse, error) {
 	health := map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -115,14 +121,14 @@ func (h *WebAPIHandler) handleHealth(ctx context.Context) (events.APIGatewayProx
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal health response"), err
 	}
 
-	return events.APIGatewayProxyResponse{
+	return events.APIGatewayV2HTTPResponse{
 		StatusCode: http.StatusOK,
 		Body:       string(body),
 	}, nil
 }
 
 // handleListMessages returns a list of messages with optional filtering
-func (h *WebAPIHandler) handleListMessages(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func (h *WebAPIHandler) handleListMessages(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	// Parse query parameters
 	var stage *models.Stage
 	var status *models.Status
@@ -171,7 +177,7 @@ func (h *WebAPIHandler) handleListMessages(ctx context.Context, request events.A
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal response"), err
 	}
 
-	return events.APIGatewayProxyResponse{
+	return events.APIGatewayV2HTTPResponse{
 		StatusCode: http.StatusOK,
 		Body:       string(body),
 	}, nil
@@ -185,7 +191,7 @@ type CreateMessageRequest struct {
 }
 
 // handleCreateMessage creates a new message manually
-func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 	var req CreateMessageRequest
 	err := json.Unmarshal([]byte(request.Body), &req)
 	if err != nil {
@@ -251,14 +257,14 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal response"), err
 	}
 
-	return events.APIGatewayProxyResponse{
+	return events.APIGatewayV2HTTPResponse{
 		StatusCode: http.StatusCreated,
 		Body:       string(body),
 	}, nil
 }
 
 // handleMetrics returns metrics about messages
-func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayProxyResponse, error) {
+func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayV2HTTPResponse, error) {
 	h.logger.InfoContext(ctx, "retrieving metrics")
 
 	// Get messages by status
@@ -295,21 +301,21 @@ func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayPro
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal metrics"), err
 	}
 
-	return events.APIGatewayProxyResponse{
+	return events.APIGatewayV2HTTPResponse{
 		StatusCode: http.StatusOK,
 		Body:       string(body),
 	}, nil
 }
 
 // createErrorResponse creates a standardized error response
-func (h *WebAPIHandler) createErrorResponse(statusCode int, message string) events.APIGatewayProxyResponse {
+func (h *WebAPIHandler) createErrorResponse(statusCode int, message string) events.APIGatewayV2HTTPResponse {
 	errorBody := map[string]string{
 		"error":   message,
 		"status":  strconv.Itoa(statusCode),
 	}
 	body, _ := json.Marshal(errorBody)
 
-	return events.APIGatewayProxyResponse{
+	return events.APIGatewayV2HTTPResponse{
 		StatusCode: statusCode,
 		Body:       string(body),
 	}

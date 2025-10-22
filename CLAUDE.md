@@ -70,7 +70,7 @@ The system follows an event-driven architecture with the following flow:
 ```
 EventBridge Scheduler → SNS Topic → SQS Queue → Lambda Services → ntfy.sh
 
-Load Balancer → Lambda (Web Frontend)
+API Gateway HTTP API → Lambda (Web Frontend)
 ```
 
 ### AWS Services
@@ -78,7 +78,7 @@ Load Balancer → Lambda (Web Frontend)
 - **SNS (Simple Notification Service)**: Pub/sub messaging for event distribution
 - **SQS (Simple Queue Service)**: Message queuing for reliable processing
 - **Lambda**: Serverless compute for both backend services and web frontend
-- **Application Load Balancer**: Routes traffic to web frontend Lambda
+- **API Gateway HTTP API**: Routes HTTP traffic to web frontend Lambda
 
 ### External Integrations
 - **ntfy.sh**: Push notification endpoint at `https://ntfy.sh/rzesz-alerts`

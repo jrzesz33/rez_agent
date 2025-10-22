@@ -101,9 +101,9 @@ func main() {
 		// ========================================
 		// Dead Letter Queue
 		dlq, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-messages-dlq-%s", stage), &sqs.QueueArgs{
-			Name:                  pulumi.String(fmt.Sprintf("rez-agent-messages-dlq-%s", stage)),
+			Name:                    pulumi.String(fmt.Sprintf("rez-agent-messages-dlq-%s", stage)),
 			MessageRetentionSeconds: pulumi.Int(1209600), // 14 days
-			Tags:                  commonTags,
+			Tags:                    commonTags,
 		})
 		if err != nil {
 			return err
@@ -111,9 +111,9 @@ func main() {
 
 		// Main Queue
 		messagesQueue, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-messages-%s", stage), &sqs.QueueArgs{
-			Name:                    pulumi.String(fmt.Sprintf("rez-agent-messages-%s", stage)),
-			VisibilityTimeoutSeconds: pulumi.Int(300), // 5 minutes
-			MessageRetentionSeconds: pulumi.Int(1209600), // 14 days
+			Name:                     pulumi.String(fmt.Sprintf("rez-agent-messages-%s", stage)),
+			VisibilityTimeoutSeconds: pulumi.Int(300),     // 5 minutes
+			MessageRetentionSeconds:  pulumi.Int(1209600), // 14 days
 			RedrivePolicy: dlq.Arn.ApplyT(func(arn string) string {
 				return fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":3}`, arn)
 			}).(pulumi.StringOutput),
@@ -431,7 +431,7 @@ func main() {
 			},
 			MemorySize: pulumi.Int(256),
 			Timeout:    pulumi.Int(60),
-			Tracing: &lambda.FunctionTracingArgs{
+			TracingConfig: &lambda.FunctionTracingConfigArgs{
 				Mode: pulumi.String(map[bool]string{true: "Active", false: "PassThrough"}[enableXRay]),
 			},
 			Tags: commonTags,
@@ -456,7 +456,7 @@ func main() {
 			},
 			MemorySize: pulumi.Int(512),
 			Timeout:    pulumi.Int(300),
-			Tracing: &lambda.FunctionTracingArgs{
+			TracingConfig: &lambda.FunctionTracingConfigArgs{
 				Mode: pulumi.String(map[bool]string{true: "Active", false: "PassThrough"}[enableXRay]),
 			},
 			Tags: commonTags,
@@ -492,7 +492,7 @@ func main() {
 			},
 			MemorySize: pulumi.Int(256),
 			Timeout:    pulumi.Int(30),
-			Tracing: &lambda.FunctionTracingArgs{
+			TracingConfig: &lambda.FunctionTracingConfigArgs{
 				Mode: pulumi.String(map[bool]string{true: "Active", false: "PassThrough"}[enableXRay]),
 			},
 			Tags: commonTags,
@@ -670,8 +670,8 @@ func main() {
 				Arn:     schedulerLambda.Arn,
 				RoleArn: schedulerExecutionRole.Arn,
 				RetryPolicy: &scheduler.ScheduleTargetRetryPolicyArgs{
-					MaximumRetryAttempts: pulumi.Int(3),
-					MaximumEventAge:      pulumi.Int(3600),
+					MaximumRetryAttempts:     pulumi.Int(3),
+					MaximumEventAgeInSeconds: pulumi.Int(3600),
 				},
 			},
 		})
@@ -685,15 +685,15 @@ func main() {
 
 		// DLQ Alarm
 		_, err = cloudwatch.NewMetricAlarm(ctx, fmt.Sprintf("rez-agent-dlq-alarm-%s", stage), &cloudwatch.MetricAlarmArgs{
-			Name:              pulumi.String(fmt.Sprintf("rez-agent-dlq-messages-%s", stage)),
+			Name:               pulumi.String(fmt.Sprintf("rez-agent-dlq-messages-%s", stage)),
 			ComparisonOperator: pulumi.String("GreaterThanThreshold"),
-			EvaluationPeriods: pulumi.Int(1),
-			MetricName:        pulumi.String("ApproximateNumberOfMessagesVisible"),
-			Namespace:         pulumi.String("AWS/SQS"),
-			Period:            pulumi.Int(300),
-			Statistic:         pulumi.String("Average"),
-			Threshold:         pulumi.Float64(1),
-			AlarmDescription:  pulumi.String("Alert when messages appear in DLQ"),
+			EvaluationPeriods:  pulumi.Int(1),
+			MetricName:         pulumi.String("ApproximateNumberOfMessagesVisible"),
+			Namespace:          pulumi.String("AWS/SQS"),
+			Period:             pulumi.Int(300),
+			Statistic:          pulumi.String("Average"),
+			Threshold:          pulumi.Float64(1),
+			AlarmDescription:   pulumi.String("Alert when messages appear in DLQ"),
 			Dimensions: pulumi.StringMap{
 				"QueueName": dlq.Name,
 			},
@@ -705,15 +705,15 @@ func main() {
 
 		// Processor Lambda Error Alarm
 		_, err = cloudwatch.NewMetricAlarm(ctx, fmt.Sprintf("rez-agent-processor-errors-%s", stage), &cloudwatch.MetricAlarmArgs{
-			Name:              pulumi.String(fmt.Sprintf("rez-agent-processor-errors-%s", stage)),
+			Name:               pulumi.String(fmt.Sprintf("rez-agent-processor-errors-%s", stage)),
 			ComparisonOperator: pulumi.String("GreaterThanThreshold"),
-			EvaluationPeriods: pulumi.Int(2),
-			MetricName:        pulumi.String("Errors"),
-			Namespace:         pulumi.String("AWS/Lambda"),
-			Period:            pulumi.Int(300),
-			Statistic:         pulumi.String("Sum"),
-			Threshold:         pulumi.Float64(5),
-			AlarmDescription:  pulumi.String("Alert when processor Lambda has errors"),
+			EvaluationPeriods:  pulumi.Int(2),
+			MetricName:         pulumi.String("Errors"),
+			Namespace:          pulumi.String("AWS/Lambda"),
+			Period:             pulumi.Int(300),
+			Statistic:          pulumi.String("Sum"),
+			Threshold:          pulumi.Float64(5),
+			AlarmDescription:   pulumi.String("Alert when processor Lambda has errors"),
 			Dimensions: pulumi.StringMap{
 				"FunctionName": processorLambda.Name,
 			},

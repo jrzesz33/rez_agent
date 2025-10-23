@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/yourusername/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
 // Note: These are basic unit tests. For integration tests with actual DynamoDB,

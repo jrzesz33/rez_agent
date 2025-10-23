@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sns/types"
-	"github.com/yourusername/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
 // SNSPublisher defines the interface for publishing messages to SNS

@@ -11,11 +11,11 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/yourusername/rez_agent/internal/messaging"
-	"github.com/yourusername/rez_agent/internal/models"
-	"github.com/yourusername/rez_agent/internal/notification"
-	"github.com/yourusername/rez_agent/internal/repository"
-	appconfig "github.com/yourusername/rez_agent/pkg/config"
+	"github.com/jrzesz33/rez_agent/internal/messaging"
+	"github.com/jrzesz33/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/notification"
+	"github.com/jrzesz33/rez_agent/internal/repository"
+	appconfig "github.com/jrzesz33/rez_agent/pkg/config"
 )
 
 // ProcessorHandler handles SQS messages and sends notifications

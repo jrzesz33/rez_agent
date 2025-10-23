@@ -322,7 +322,7 @@ EventBridge (24h schedule) → Scheduler Lambda
 - **Deliverable**: Full observability stack with proactive alerting
 
 ### Phase 5: Frontend & Polish (Week 7-8)
-- Build React/Next.js dashboard (OAuth integration, message list, metrics)
+- Build Svelt dashboard (OAuth integration, message list, metrics)
 - Write runbooks for common issues
 - Write unit and integration tests
 - **Deliverable**: Production-ready system with web interface

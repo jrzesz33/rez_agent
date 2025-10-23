@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yourusername/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
 // Config holds all configuration for the application
@@ -16,16 +16,22 @@ type Config struct {
 	AWSRegion string
 
 	// DynamoDB Configuration
-	DynamoDBTableName string
+	DynamoDBTableName          string
+	WebActionResultsTableName  string
 
 	// SNS Configuration
-	SNSTopicArn string
+	SNSTopicArn           string
+	WebActionSNSTopicArn  string
 
 	// SQS Configuration
-	SQSQueueURL string
+	SQSQueueURL           string
+	WebActionSQSQueueURL  string
 
 	// Ntfy Configuration
 	NtfyURL string
+
+	// Secrets Manager Configuration
+	GolfSecretName string
 
 	// Lambda Configuration
 	LambdaTimeout int
@@ -53,9 +59,19 @@ func Load() (*Config, error) {
 		dynamoDBTableName = "rez-agent-messages"
 	}
 
+	webActionResultsTableName := os.Getenv("WEB_ACTION_RESULTS_TABLE_NAME")
+	if webActionResultsTableName == "" {
+		webActionResultsTableName = fmt.Sprintf("rez-agent-web-action-results-%s", stage)
+	}
+
 	snsTopicArn := os.Getenv("SNS_TOPIC_ARN")
 	if snsTopicArn == "" {
 		return nil, fmt.Errorf("SNS_TOPIC_ARN environment variable is required")
+	}
+
+	webActionSNSTopicArn := os.Getenv("WEB_ACTION_SNS_TOPIC_ARN")
+	if webActionSNSTopicArn == "" {
+		return nil, fmt.Errorf("WEB_ACTION_SNS_TOPIC_ARN environment variable is required")
 	}
 
 	sqsQueueURL := os.Getenv("SQS_QUEUE_URL")
@@ -63,19 +79,33 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SQS_QUEUE_URL environment variable is required")
 	}
 
+	webActionSQSQueueURL := os.Getenv("WEB_ACTION_SQS_QUEUE_URL")
+	if webActionSQSQueueURL == "" {
+		return nil, fmt.Errorf("WEB_ACTION_SQS_QUEUE_URL environment variable is required")
+	}
+
 	ntfyURL := os.Getenv("NTFY_URL")
 	if ntfyURL == "" {
 		ntfyURL = "https://ntfy.sh/rzesz-alerts"
 	}
 
+	golfSecretName := os.Getenv("GOLF_SECRET_NAME")
+	if golfSecretName == "" {
+		golfSecretName = fmt.Sprintf("rez-agent/golf/credentials-%s", stage)
+	}
+
 	return &Config{
-		Stage:             stageEnum,
-		AWSRegion:         awsRegion,
-		DynamoDBTableName: dynamoDBTableName,
-		SNSTopicArn:       snsTopicArn,
-		SQSQueueURL:       sqsQueueURL,
-		NtfyURL:           ntfyURL,
-		LambdaTimeout:     30,
+		Stage:                     stageEnum,
+		AWSRegion:                 awsRegion,
+		DynamoDBTableName:         dynamoDBTableName,
+		WebActionResultsTableName: webActionResultsTableName,
+		SNSTopicArn:               snsTopicArn,
+		WebActionSNSTopicArn:      webActionSNSTopicArn,
+		SQSQueueURL:               sqsQueueURL,
+		WebActionSQSQueueURL:      webActionSQSQueueURL,
+		NtfyURL:                   ntfyURL,
+		GolfSecretName:            golfSecretName,
+		LambdaTimeout:             30,
 	}, nil
 }
 

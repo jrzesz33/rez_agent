@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/yourusername/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
 func TestNewSNSClient(t *testing.T) {

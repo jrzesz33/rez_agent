@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/yourusername/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
 // SQSMessageWrapper represents the structure of messages received from SQS

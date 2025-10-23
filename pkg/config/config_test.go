@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/yourusername/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
 func TestLoad(t *testing.T) {

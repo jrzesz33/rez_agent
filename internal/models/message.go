@@ -72,12 +72,14 @@ const (
 	MessageTypeManual MessageType = "manual"
 	// MessageTypeScheduled is a scheduled message
 	MessageTypeScheduled MessageType = "scheduled"
+	// MessageTypeWebAction is a web action request (HTTP REST API call)
+	MessageTypeWebAction MessageType = "web_action"
 )
 
 // IsValid checks if the message type value is valid
 func (mt MessageType) IsValid() bool {
 	switch mt {
-	case MessageTypeHelloWorld, MessageTypeManual, MessageTypeScheduled:
+	case MessageTypeHelloWorld, MessageTypeManual, MessageTypeScheduled, MessageTypeWebAction:
 		return true
 	default:
 		return false

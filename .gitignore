@@ -49,3 +49,4 @@ infrastructure/pulumi-rez-agent
 tmp/
 temp/
 go.sum
+NEXT_REQUIREMENT.MD

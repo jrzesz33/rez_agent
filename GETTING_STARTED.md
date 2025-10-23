@@ -274,9 +274,11 @@ curl "$WEBAPI_URL/api/messages?stage=dev"
 curl -X POST $WEBAPI_URL/api/messages \
   -H "Content-Type: application/json" \
   -d '{
-    "message_type": "test",
-    "payload": "Test message from curl"
+    "message_type": "manual",
+    "payload": "Test message from curl",
+    "stage":"dev"
   }'
+  
 ```
 
 ### Manual Testing

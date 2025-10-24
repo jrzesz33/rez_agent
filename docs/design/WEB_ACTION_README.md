@@ -205,6 +205,24 @@ Negligible cost due to low invocation frequency (60 messages/month).
   }
 }
 ```
+```curl
+
+  curl -X POST $WEBAPI_URL/api/messages \
+    -H "Content-Type: application/json" \
+    -d '{
+      "version": "1.0",
+      "url": "https://api.weather.gov/gridpoints/TOP/31,80/forecast",
+      "action": "weather",
+      "arguments": {
+        "days": 2
+      },
+      "auth_config": {
+        "type": "none"
+      },
+      "stage": "dev"
+    }'
+
+```
 
 **Output:** Detailed forecast for N days sent to ntfy.sh
 

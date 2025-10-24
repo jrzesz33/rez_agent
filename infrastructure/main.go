@@ -41,7 +41,7 @@ func main() {
 			Name:        pulumi.String(fmt.Sprintf("rez-agent-messages-%s", stage)),
 			BillingMode: pulumi.String("PAY_PER_REQUEST"),
 			HashKey:     pulumi.String("id"),
-			RangeKey:    pulumi.String("created_date"),
+			// Note: Removed RangeKey to simplify operations since id is unique
 			Attributes: dynamodb.TableAttributeArray{
 				&dynamodb.TableAttributeArgs{
 					Name: pulumi.String("id"),
@@ -124,9 +124,10 @@ func main() {
 
 		// SNS to SQS Subscription
 		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-messages-subscription-%s", stage), &sns.TopicSubscriptionArgs{
-			Topic:    messagesTopic.Arn,
-			Protocol: pulumi.String("sqs"),
-			Endpoint: messagesQueue.Arn,
+			Topic:              messagesTopic.Arn,
+			Protocol:           pulumi.String("sqs"),
+			Endpoint:           messagesQueue.Arn,
+			RawMessageDelivery: pulumi.Bool(true), // Deliver raw message without SNS envelope
 		})
 		if err != nil {
 			return err
@@ -472,6 +473,14 @@ func main() {
 			FunctionName:   processorLambda.Arn,
 			BatchSize:      pulumi.Int(10),
 			Enabled:        pulumi.Bool(true),
+			FilterCriteria: &lambda.EventSourceMappingFilterCriteriaArgs{
+				Filters: lambda.EventSourceMappingFilterCriteriaFilterArray{
+					&lambda.EventSourceMappingFilterCriteriaFilterArgs{
+						// Filter to exclude web_action messages (those go to webaction Lambda)
+						Pattern: pulumi.String(`{"body": {"message_type": [{"anything-but": ["web_action"]}]}}`),
+					},
+				},
+			},
 		}, pulumi.DependsOn([]pulumi.Resource{queuePolicy}))
 		if err != nil {
 			return err
@@ -499,6 +508,137 @@ func main() {
 			},
 			Tags: commonTags,
 		}, pulumi.DependsOn([]pulumi.Resource{webapiLogGroup}))
+		if err != nil {
+			return err
+		}
+
+		// ========================================
+		// WebAction Lambda
+		// ========================================
+
+		// WebAction Lambda Role
+		webactionRole, err := iam.NewRole(ctx, fmt.Sprintf("rez-agent-webaction-role-%s", stage), &iam.RoleArgs{
+			Name: pulumi.String(fmt.Sprintf("rez-agent-webaction-role-%s", stage)),
+			AssumeRolePolicy: pulumi.String(`{
+				"Version": "2012-10-17",
+				"Statement": [{
+					"Effect": "Allow",
+					"Principal": {"Service": "lambda.amazonaws.com"},
+					"Action": "sts:AssumeRole"
+				}]
+			}`),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Attach basic Lambda execution policy
+		_, err = iam.NewRolePolicyAttachment(ctx, fmt.Sprintf("rez-agent-webaction-basic-execution-%s", stage), &iam.RolePolicyAttachmentArgs{
+			Role:      webactionRole.Name,
+			PolicyArn: pulumi.String("arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"),
+		})
+		if err != nil {
+			return err
+		}
+
+		// WebAction Lambda Policy
+		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-webaction-policy-%s", stage), &iam.RolePolicyArgs{
+			Role: webactionRole.Name,
+			Policy: pulumi.All(messagesTable.Arn, messagesQueue.Arn).ApplyT(func(args []interface{}) string {
+				tableArn := args[0].(string)
+				queueArn := args[1].(string)
+				return fmt.Sprintf(`{
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+								"dynamodb:GetItem",
+								"dynamodb:PutItem",
+								"dynamodb:UpdateItem"
+							],
+							"Resource": [
+								"%s",
+								"%s/*"
+							]
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"sqs:ReceiveMessage",
+								"sqs:DeleteMessage",
+								"sqs:GetQueueAttributes"
+							],
+							"Resource": "%s"
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"secretsmanager:GetSecretValue"
+							],
+							"Resource": "arn:aws:secretsmanager:*:*:secret:rez-agent/*"
+						}
+					]
+				}`, tableArn, tableArn, queueArn)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
+		// WebAction Lambda Log Group
+		webactionLogGroup, err := cloudwatch.NewLogGroup(ctx, fmt.Sprintf("rez-agent-webaction-logs-%s", stage), &cloudwatch.LogGroupArgs{
+			Name:            pulumi.String(fmt.Sprintf("/aws/lambda/rez-agent-webaction-%s", stage)),
+			RetentionInDays: pulumi.Int(logRetentionDays),
+			Tags:            commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// WebAction Lambda Function
+		webactionLambda, err := lambda.NewFunction(ctx, fmt.Sprintf("rez-agent-webaction-%s", stage), &lambda.FunctionArgs{
+			Name:    pulumi.String(fmt.Sprintf("rez-agent-webaction-%s", stage)),
+			Runtime: pulumi.String("provided.al2"),
+			Role:    webactionRole.Arn,
+			Handler: pulumi.String("bootstrap"),
+			Code:    pulumi.NewFileArchive("../build/webaction.zip"),
+			Environment: &lambda.FunctionEnvironmentArgs{
+				Variables: pulumi.StringMap{
+					"DYNAMODB_TABLE_NAME":          messagesTable.Name,
+					"WEB_ACTION_RESULTS_TABLE_NAME": pulumi.String(fmt.Sprintf("rez-agent-web-action-results-%s", stage)),
+					"SNS_TOPIC_ARN":                messagesTopic.Arn,
+					"SQS_QUEUE_URL":                messagesQueue.Url,
+					"STAGE":                        pulumi.String(stage),
+					"GOLF_SECRET_NAME":             pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
+				},
+			},
+			MemorySize: pulumi.Int(512),
+			Timeout:    pulumi.Int(300),
+			TracingConfig: &lambda.FunctionTracingConfigArgs{
+				Mode: pulumi.String(map[bool]string{true: "Active", false: "PassThrough"}[enableXRay]),
+			},
+			Tags: commonTags,
+		}, pulumi.DependsOn([]pulumi.Resource{webactionLogGroup}))
+		if err != nil {
+			return err
+		}
+
+		// WebAction Lambda SQS Event Source Mapping
+		_, err = lambda.NewEventSourceMapping(ctx, fmt.Sprintf("rez-agent-webaction-sqs-trigger-%s", stage), &lambda.EventSourceMappingArgs{
+			EventSourceArn: messagesQueue.Arn,
+			FunctionName:   webactionLambda.Arn,
+			BatchSize:      pulumi.Int(1),
+			Enabled:        pulumi.Bool(true),
+			FilterCriteria: &lambda.EventSourceMappingFilterCriteriaArgs{
+				Filters: lambda.EventSourceMappingFilterCriteriaFilterArray{
+					&lambda.EventSourceMappingFilterCriteriaFilterArgs{
+						Pattern: pulumi.String(`{"body": {"message_type": ["web_action"]}}`),
+					},
+				},
+			},
+		}, pulumi.DependsOn([]pulumi.Resource{queuePolicy}))
 		if err != nil {
 			return err
 		}
@@ -685,6 +825,7 @@ func main() {
 		ctx.Export("dlqArn", dlq.Arn)
 		ctx.Export("schedulerLambdaArn", schedulerLambda.Arn)
 		ctx.Export("processorLambdaArn", processorLambda.Arn)
+		ctx.Export("webactionLambdaArn", webactionLambda.Arn)
 		ctx.Export("webapiLambdaArn", webapiLambda.Arn)
 		ctx.Export("apiGatewayId", httpApi.ID())
 		ctx.Export("apiGatewayEndpoint", httpApi.ApiEndpoint)

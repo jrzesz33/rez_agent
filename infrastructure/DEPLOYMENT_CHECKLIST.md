@@ -166,6 +166,7 @@ pulumi config set schedulerCron "cron(0 12 * * ? *)"
   ```bash
   make lambda-logs-scheduler
   make lambda-logs-processor
+  make lambda-logs-webaction
   make lambda-logs-webapi
   ```
 

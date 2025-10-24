@@ -187,6 +187,7 @@ make infra-outputs
 # View logs
 make lambda-logs-scheduler
 make lambda-logs-processor
+make lambda-logs-webaction
 make lambda-logs-webapi
 ```
 
@@ -341,6 +342,7 @@ pulumi up
 # Tail logs in real-time
 make lambda-logs-scheduler
 make lambda-logs-processor
+make lambda-logs-webaction
 make lambda-logs-webapi
 
 # Or use AWS CLI
@@ -410,6 +412,7 @@ make lambda-logs-processor
    ```bash
    make lambda-logs-scheduler
    make lambda-logs-processor
+   make lambda-logs-webaction
    make lambda-logs-webapi
    ```
 
@@ -480,6 +483,7 @@ make infra-outputs         # Show deployed resource details
 # Monitoring
 make lambda-logs-scheduler # View scheduler logs
 make lambda-logs-processor # View processor logs
+make lambda-logs-webaction # View web action logs
 make lambda-logs-webapi    # View web API logs
 
 # Cleanup

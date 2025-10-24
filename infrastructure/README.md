@@ -203,6 +203,7 @@ curl $(pulumi stack output webapiUrl --cwd infrastructure)/api/health
 # Watch Lambda logs
 make lambda-logs-scheduler  # In one terminal
 make lambda-logs-processor  # In another terminal
+make lambda-logs-webaction  # In another terminal
 make lambda-logs-webapi     # In another terminal
 ```
 
@@ -371,6 +372,7 @@ Environment: dev/prod
 # Tail logs for each Lambda function
 make lambda-logs-scheduler
 make lambda-logs-processor
+make lambda-logs-webaction
 make lambda-logs-webapi
 
 # Or manually with AWS CLI

@@ -1,4 +1,4 @@
-.PHONY: build build-scheduler build-processor build-webapi clean deploy destroy help
+.PHONY: build build-scheduler build-processor build-webaction build-webapi clean deploy destroy help
 
 # Variables
 BUILD_DIR = build
@@ -16,7 +16,7 @@ help: ## Show this help message
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
 
-build: clean build-scheduler build-processor build-webapi ## Build all Lambda functions
+build: clean build-scheduler build-processor build-webaction build-webapi ## Build all Lambda functions
 	@echo "$(GREEN)All Lambda functions built successfully$(NC)"
 
 build-scheduler: ## Build scheduler Lambda function
@@ -32,6 +32,13 @@ build-processor: ## Build processor Lambda function
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o $(BUILD_DIR)/bootstrap ./cmd/processor
 	@cd $(BUILD_DIR) && zip processor.zip bootstrap && rm bootstrap
 	@echo "$(GREEN)Processor Lambda built: $(BUILD_DIR)/processor.zip$(NC)"
+
+build-webaction: ## Build webaction Lambda function
+	@echo "$(YELLOW)Building webaction Lambda...$(NC)"
+	@mkdir -p $(BUILD_DIR)
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o $(BUILD_DIR)/bootstrap ./cmd/webaction
+	@cd $(BUILD_DIR) && zip webaction.zip bootstrap && rm bootstrap
+	@echo "$(GREEN)WebAction Lambda built: $(BUILD_DIR)/webaction.zip$(NC)"
 
 build-webapi: ## Build webapi Lambda function
 	@echo "$(YELLOW)Building webapi Lambda...$(NC)"
@@ -117,10 +124,10 @@ local-dynamodb-stop: ## Stop local DynamoDB
 	@echo "$(GREEN)Local DynamoDB stopped$(NC)"
 
 # Deployment workflow
-deploy-dev: infra-stack-dev infra-up ## Deploy to dev environment
+deploy-dev: build infra-stack-dev infra-up ## Build and deploy to dev environment
 	@echo "$(GREEN)Deployment to dev complete$(NC)"
 
-deploy-prod: infra-stack-prod infra-up ## Deploy to prod environment
+deploy-prod: build infra-stack-prod infra-up ## Build and deploy to prod environment
 	@echo "$(GREEN)Deployment to prod complete$(NC)"
 
 # Quick commands
@@ -141,6 +148,9 @@ lambda-logs-scheduler: ## Tail scheduler Lambda logs (requires AWS CLI and jq)
 
 lambda-logs-processor: ## Tail processor Lambda logs
 	@aws logs tail /aws/lambda/rez-agent-processor-$$(pulumi stack --cwd $(INFRASTRUCTURE_DIR) output | grep -o 'dev\|prod') --follow
+
+lambda-logs-webaction: ## Tail webaction Lambda logs
+	@aws logs tail /aws/lambda/rez-agent-webaction-$$(pulumi stack --cwd $(INFRASTRUCTURE_DIR) output | grep -o 'dev\|prod') --follow
 
 lambda-logs-webapi: ## Tail webapi Lambda logs
 	@aws logs tail /aws/lambda/rez-agent-webapi-$$(pulumi stack --cwd $(INFRASTRUCTURE_DIR) output | grep -o 'dev\|prod') --follow

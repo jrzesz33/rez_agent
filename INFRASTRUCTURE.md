@@ -197,6 +197,7 @@ make deploy-prod           # Build + deploy to prod
 ```bash
 make lambda-logs-scheduler # Tail scheduler Lambda logs
 make lambda-logs-processor # Tail processor Lambda logs
+make lambda-logs-webaction # Tail webaction Lambda logs
 make lambda-logs-webapi    # Tail webapi Lambda logs
 ```
 

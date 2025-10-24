@@ -69,20 +69,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SNS_TOPIC_ARN environment variable is required")
 	}
 
+	// Web action SNS topic ARN (optional - only needed for webaction Lambda)
 	webActionSNSTopicArn := os.Getenv("WEB_ACTION_SNS_TOPIC_ARN")
-	if webActionSNSTopicArn == "" {
-		return nil, fmt.Errorf("WEB_ACTION_SNS_TOPIC_ARN environment variable is required")
-	}
 
 	sqsQueueURL := os.Getenv("SQS_QUEUE_URL")
 	if sqsQueueURL == "" {
 		return nil, fmt.Errorf("SQS_QUEUE_URL environment variable is required")
 	}
 
+	// Web action SQS queue URL (optional - only needed for webaction Lambda)
 	webActionSQSQueueURL := os.Getenv("WEB_ACTION_SQS_QUEUE_URL")
-	if webActionSQSQueueURL == "" {
-		return nil, fmt.Errorf("WEB_ACTION_SQS_QUEUE_URL environment variable is required")
-	}
 
 	ntfyURL := os.Getenv("NTFY_URL")
 	if ntfyURL == "" {

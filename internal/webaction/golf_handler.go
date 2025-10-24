@@ -116,19 +116,19 @@ func (h *GolfHandler) fetchReservations(ctx context.Context, apiURL, accessToken
 	}
 
 	// Extract reservations from response
-	if apiResp.Data == nil || apiResp.Data.Reservations == nil {
+	if apiResp.Data == nil || apiResp.Data.Items == nil {
 		h.logger.Warn("no reservations found in response")
 		return []GolfReservation{}, nil
 	}
 
-	return apiResp.Data.Reservations, nil
+	return apiResp.Data.Items, nil
 }
 
 // GolfAPIResponse represents the golf API response structure
 type GolfAPIResponse struct {
 	Data *struct {
-		Reservations []GolfReservation `json:"reservations"`
-		TotalCount   int               `json:"totalCount"`
+		Items      []GolfReservation `json:"items"`
+		TotalCount int               `json:"totalCount"`
 	} `json:"data"`
 	Success bool   `json:"success"`
 	Message string `json:"message"`
@@ -137,12 +137,10 @@ type GolfAPIResponse struct {
 // GolfReservation represents a single golf reservation
 type GolfReservation struct {
 	ReservationID   int       `json:"reservationId"`
-	TeeTime         string    `json:"teeTime"`
+	DateTime        string    `json:"dateTime"`
 	CourseName      string    `json:"courseName"`
-	Players         int       `json:"players"`
-	Holes           int       `json:"holes"`
+	NumberOfPlayers int       `json:"numberOfPlayers"`
 	ConfirmationNum string    `json:"confirmationNumber"`
-	Status          string    `json:"status"`
 	TeeTimeDT       time.Time // Parsed time for sorting
 }
 
@@ -158,13 +156,13 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 
 	// Parse tee times and sort by date
 	for i := range reservations {
-		teeTime, err := time.Parse(time.RFC3339, reservations[i].TeeTime)
+		teeTime, err := time.Parse(time.RFC3339, reservations[i].DateTime)
 		if err != nil {
 			// Try alternative format
-			teeTime, err = time.Parse("2006-01-02T15:04:05", reservations[i].TeeTime)
+			teeTime, err = time.Parse("2006-01-02T15:04:05", reservations[i].DateTime)
 			if err != nil {
 				h.logger.Warn("failed to parse tee time",
-					slog.String("tee_time", reservations[i].TeeTime),
+					slog.String("date_time", reservations[i].DateTime),
 					slog.String("error", err.Error()),
 				)
 				continue
@@ -209,23 +207,12 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 			sb.WriteString(fmt.Sprintf("   📍 %s\n", res.CourseName))
 		}
 
-		// Players and holes
-		sb.WriteString(fmt.Sprintf("   👥 %d player(s) • ⛳ %d holes\n", res.Players, res.Holes))
+		// Players
+		sb.WriteString(fmt.Sprintf("   👥 %d player(s)\n", res.NumberOfPlayers))
 
 		// Confirmation number
 		if res.ConfirmationNum != "" {
 			sb.WriteString(fmt.Sprintf("   🎟️ Confirmation: %s\n", res.ConfirmationNum))
-		}
-
-		// Status
-		if res.Status != "" {
-			statusEmoji := "✅"
-			if res.Status == "Pending" {
-				statusEmoji = "⏳"
-			} else if res.Status == "Cancelled" {
-				statusEmoji = "❌"
-			}
-			sb.WriteString(fmt.Sprintf("   %s Status: %s\n", statusEmoji, res.Status))
 		}
 
 		// Separator

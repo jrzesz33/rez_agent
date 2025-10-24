@@ -184,10 +184,20 @@ func (h *WebAPIHandler) handleListMessages(ctx context.Context, request events.A
 }
 
 // CreateMessageRequest represents a request to create a new message
+// For simple notification messages, use the "payload" field.
+// For web action messages, embed the WebActionPayload fields directly at the root level.
 type CreateMessageRequest struct {
-	Payload     string              `json:"payload"`
-	MessageType models.MessageType  `json:"message_type"`
-	Stage       models.Stage        `json:"stage,omitempty"`
+	// Simple message fields
+	Payload     string             `json:"payload,omitempty"`
+	MessageType models.MessageType `json:"message_type,omitempty"`
+	Stage       models.Stage       `json:"stage,omitempty"`
+
+	// Web action fields (embedded from WebActionPayload)
+	Version    string                    `json:"version,omitempty"`
+	URL        string                    `json:"url,omitempty"`
+	Action     models.WebActionType      `json:"action,omitempty"`
+	Arguments  map[string]interface{}    `json:"arguments,omitempty"`
+	AuthConfig *models.AuthConfig        `json:"auth_config,omitempty"`
 }
 
 // handleCreateMessage creates a new message manually
@@ -199,9 +209,16 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 		return h.createErrorResponse(http.StatusBadRequest, "invalid request body"), err
 	}
 
-	// Validate request
-	if req.Payload == "" {
-		return h.createErrorResponse(http.StatusBadRequest, "payload is required"), nil
+	// Detect if this is a web action request (has version, url, action fields)
+	isWebAction := req.Version != "" || req.URL != "" || req.Action != ""
+
+	// Validate request - either payload or web action fields must be provided
+	if req.Payload == "" && !isWebAction {
+		return h.createErrorResponse(http.StatusBadRequest, "either payload or web action fields (version, url, action) are required"), nil
+	}
+
+	if req.Payload != "" && isWebAction {
+		return h.createErrorResponse(http.StatusBadRequest, "cannot specify both payload and web action fields"), nil
 	}
 
 	// Use config stage if not provided
@@ -214,17 +231,54 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 		return h.createErrorResponse(http.StatusBadRequest, "invalid stage value"), nil
 	}
 
+	// Determine message type
 	messageType := req.MessageType
 	if messageType == "" {
-		messageType = models.MessageTypeManual
+		// Auto-detect message type based on request content
+		if isWebAction {
+			messageType = models.MessageTypeWebAction
+		} else {
+			messageType = models.MessageTypeManual
+		}
 	}
 
 	if !messageType.IsValid() {
 		return h.createErrorResponse(http.StatusBadRequest, "invalid message_type value"), nil
 	}
 
+	// Prepare payload string
+	var payloadStr string
+	if isWebAction {
+		// Construct WebActionPayload from request fields
+		webActionPayload := &models.WebActionPayload{
+			Version:    req.Version,
+			URL:        req.URL,
+			Action:     req.Action,
+			Arguments:  req.Arguments,
+			AuthConfig: req.AuthConfig,
+		}
+
+		// Validate web action if message type is web_action
+		if messageType == models.MessageTypeWebAction {
+			if err := webActionPayload.Validate(); err != nil {
+				h.logger.ErrorContext(ctx, "invalid web action payload", slog.String("error", err.Error()))
+				return h.createErrorResponse(http.StatusBadRequest, fmt.Sprintf("invalid web action: %s", err.Error())), nil
+			}
+		}
+
+		// Serialize web action to JSON
+		webActionJSON, err := json.Marshal(webActionPayload)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "failed to serialize web action", slog.String("error", err.Error()))
+			return h.createErrorResponse(http.StatusInternalServerError, "failed to serialize web action"), err
+		}
+		payloadStr = string(webActionJSON)
+	} else {
+		payloadStr = req.Payload
+	}
+
 	// Create message
-	message := models.NewMessage("webapi", stage, messageType, req.Payload)
+	message := models.NewMessage("webapi", stage, messageType, payloadStr)
 
 	h.logger.InfoContext(ctx, "creating message",
 		slog.String("message_id", message.ID),

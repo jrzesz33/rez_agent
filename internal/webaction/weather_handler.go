@@ -32,7 +32,7 @@ func (h *WeatherHandler) GetActionType() models.WebActionType {
 }
 
 // Execute fetches weather forecast and formats notification
-func (h *WeatherHandler) Execute(ctx context.Context, payload *models.WebActionPayload) (string, error) {
+func (h *WeatherHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
 	h.logger.Info("executing weather action",
 		slog.String("url", payload.URL),
 	)
@@ -56,13 +56,13 @@ func (h *WeatherHandler) Execute(ctx context.Context, payload *models.WebActionP
 		Timeout: 30 * time.Second,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch weather data: %w", err)
+		return nil, fmt.Errorf("failed to fetch weather data: %w", err)
 	}
 
 	// Parse weather response
 	var weatherData WeatherAPIResponse
 	if err := json.Unmarshal([]byte(resp.Body), &weatherData); err != nil {
-		return "", fmt.Errorf("failed to parse weather response: %w", err)
+		return nil, fmt.Errorf("failed to parse weather response: %w", err)
 	}
 
 	// Format notification message
@@ -101,10 +101,9 @@ type WeatherPeriod struct {
 }
 
 // formatWeatherNotification formats weather data into a readable notification
-func (h *WeatherHandler) formatWeatherNotification(data WeatherAPIResponse, numDays int) string {
+func (h *WeatherHandler) formatWeatherNotification(data WeatherAPIResponse, numDays int) []string {
 	var sb strings.Builder
-
-	sb.WriteString("🌤️ Weather Forecast\n\n")
+	var strOut []string
 
 	// Calculate how many periods to include (2 periods per day: day and night)
 	maxPeriods := numDays * 2
@@ -114,7 +113,12 @@ func (h *WeatherHandler) formatWeatherNotification(data WeatherAPIResponse, numD
 
 	// Include detailed forecast for each period
 	for i := 0; i < maxPeriods; i++ {
+
 		period := data.Properties.Periods[i]
+
+		if sb.Len() == 0 {
+			sb.WriteString("🌤️ Weather Forecast\n")
+		}
 
 		// Period header
 		sb.WriteString(fmt.Sprintf("📅 %s\n", period.Name))
@@ -142,24 +146,32 @@ func (h *WeatherHandler) formatWeatherNotification(data WeatherAPIResponse, numD
 		sb.WriteString(fmt.Sprintf("💨 Wind: %s %s\n", period.WindSpeed, period.WindDirection))
 
 		// Short forecast
-		sb.WriteString(fmt.Sprintf("☁️ %s\n", period.ShortForecast))
+		//sb.WriteString(fmt.Sprintf("☁️ %s\n", period.ShortForecast))
 
 		// Detailed forecast
-		sb.WriteString(fmt.Sprintf("\n%s\n", period.DetailedForecast))
+		sb.WriteString(fmt.Sprintf("☁️ %s\n", period.DetailedForecast))
 
 		// Separator between periods
-		if i < maxPeriods-1 {
-			sb.WriteString("\n" + strings.Repeat("─", 40) + "\n\n")
+		//if i < maxPeriods-1 {
+		//	sb.WriteString("\n" + strings.Repeat("─", 40) + "\n\n")
+		//}
+
+		if !period.IsDaytime {
+			strOut = append(strOut, sb.String())
+			sb.Reset()
+		} else {
+			sb.WriteString("\n\n")
 		}
 	}
 
-	// Footer with update time
+	/*/ Footer with update time
 	if data.Properties.Updated != "" {
 		updateTime, err := time.Parse(time.RFC3339, data.Properties.Updated)
 		if err == nil {
 			sb.WriteString(fmt.Sprintf("\n\nUpdated: %s", updateTime.Format("Mon Jan 2, 3:04 PM MST")))
 		}
 	}
+	//*/
 
-	return sb.String()
+	return strOut
 }

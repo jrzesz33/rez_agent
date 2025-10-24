@@ -24,7 +24,7 @@ func ParseSQSEvent(event events.SQSEvent, logger *slog.Logger) ([]*models.Messag
 	messages := make([]*models.Message, 0, len(event.Records))
 
 	for _, record := range event.Records {
-		// The message body from SNS-to-SQS subscription is wrapped
+		/*/ The message body from SNS-to-SQS subscription is wrapped
 		var snsMessage struct {
 			Message string `json:"Message"`
 		}
@@ -39,14 +39,16 @@ func ParseSQSEvent(event events.SQSEvent, logger *slog.Logger) ([]*models.Messag
 			// If that fails, try direct unmarshal
 			snsMessage.Message = record.Body
 		}
+		//*/
 
-		// Now unmarshal the actual message
+		// Now unmarshal the actual message mre
 		var message models.Message
-		err = json.Unmarshal([]byte(snsMessage.Message), &message)
+		err := json.Unmarshal([]byte(record.Body), &message)
 		if err != nil {
 			logger.Error("failed to unmarshal message",
 				slog.String("error", err.Error()),
 				slog.String("message_id", record.MessageId),
+				slog.String("msg_record", record.Body),
 			)
 			return nil, fmt.Errorf("failed to unmarshal message from SQS record %s: %w", record.MessageId, err)
 		}

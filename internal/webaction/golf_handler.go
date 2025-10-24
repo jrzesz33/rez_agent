@@ -38,14 +38,14 @@ func (h *GolfHandler) GetActionType() models.WebActionType {
 }
 
 // Execute fetches golf reservations and formats notification
-func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayload) (string, error) {
+func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
 	h.logger.Info("executing golf action",
 		slog.String("url", payload.URL),
 	)
 
 	// Validate authentication configuration
 	if payload.AuthConfig == nil || payload.AuthConfig.Type != models.AuthTypeOAuthPassword {
-		return "", fmt.Errorf("golf action requires OAuth password authentication")
+		return nil, fmt.Errorf("golf action requires OAuth password authentication")
 	}
 
 	// Perform OAuth authentication
@@ -66,7 +66,7 @@ func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayl
 	// Get OAuth token
 	accessToken, err := h.oauthClient.OAuthPasswordGrant(ctx, tokenURL, secretName, scope, oauthHeaders)
 	if err != nil {
-		return "", fmt.Errorf("OAuth authentication failed: %w", err)
+		return nil, fmt.Errorf("OAuth authentication failed: %w", err)
 	}
 
 	h.logger.Info("OAuth authentication successful, fetching reservations")
@@ -74,7 +74,7 @@ func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayl
 	// Fetch reservations
 	reservations, err := h.fetchReservations(ctx, payload.URL, accessToken)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch reservations: %w", err)
+		return nil, fmt.Errorf("failed to fetch reservations: %w", err)
 	}
 
 	// Format notification message
@@ -97,6 +97,7 @@ func (h *GolfHandler) fetchReservations(ctx context.Context, apiURL, accessToken
 		"client-id":       "onlineresweb",
 		"referer":         "https://birdsfoot.cps.golf/onlineresweb/my-reservation",
 		"user-agent":      "Mozilla/5.0 (compatible; rez-agent/1.0)",
+		"x-componentid":   "1",
 	}
 
 	resp, err := h.httpClient.Do(ctx, httpclient.RequestConfig{
@@ -116,42 +117,41 @@ func (h *GolfHandler) fetchReservations(ctx context.Context, apiURL, accessToken
 	}
 
 	// Extract reservations from response
-	if apiResp.Data == nil || apiResp.Data.Items == nil {
+	if len(apiResp.Items) < 1 {
 		h.logger.Warn("no reservations found in response")
 		return []GolfReservation{}, nil
 	}
 
-	return apiResp.Data.Items, nil
+	return apiResp.Items, nil
 }
 
 // GolfAPIResponse represents the golf API response structure
 type GolfAPIResponse struct {
-	Data *struct {
-		Items      []GolfReservation `json:"items"`
-		TotalCount int               `json:"totalCount"`
-	} `json:"data"`
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Items       []GolfReservation `json:"items"`
+	TotalCount  int               `json:"totalItems"`
+	CurrentPage int               `json:"currentPage"`
+	TotalPages  int               `json:"totalPages"`
 }
 
 // GolfReservation represents a single golf reservation
 type GolfReservation struct {
 	ReservationID   int       `json:"reservationId"`
-	DateTime        string    `json:"dateTime"`
+	DateTime        string    `json:"startTime"`
 	CourseName      string    `json:"courseName"`
-	NumberOfPlayers int       `json:"numberOfPlayers"`
-	ConfirmationNum string    `json:"confirmationNumber"`
+	NumberOfPlayers int       `json:"numberOfPlayer"`
+	ConfirmationNum string    `json:"reservationConfirmKey"`
 	TeeTimeDT       time.Time // Parsed time for sorting
 }
 
 // formatReservationNotification formats reservations into a readable notification
-func (h *GolfHandler) formatReservationNotification(reservations []GolfReservation) string {
+func (h *GolfHandler) formatReservationNotification(reservations []GolfReservation) []string {
 	var sb strings.Builder
-
+	var strOut []string
 	if len(reservations) == 0 {
 		sb.WriteString("⛳ Golf Reservations\n\n")
 		sb.WriteString("No upcoming tee times found.\n")
-		return sb.String()
+		strOut = append(strOut, sb.String())
+		return strOut
 	}
 
 	// Parse tee times and sort by date
@@ -225,6 +225,6 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 	if len(reservations) > 0 {
 		sb.WriteString(fmt.Sprintf("\n\n🏌️ Total: %d upcoming reservation(s)", len(reservations)))
 	}
-
-	return sb.String()
+	strOut = append(strOut, sb.String())
+	return strOut
 }

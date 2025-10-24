@@ -545,9 +545,10 @@ func main() {
 		// WebAction Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-webaction-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: webactionRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, messagesQueue.Arn).ApplyT(func(args []interface{}) string {
+			Policy: pulumi.All(messagesTable.Arn, messagesQueue.Arn, messagesTopic.Arn).ApplyT(func(args []interface{}) string {
 				tableArn := args[0].(string)
 				queueArn := args[1].(string)
+				topicArn := args[2].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -574,13 +575,18 @@ func main() {
 						},
 						{
 							"Effect": "Allow",
+							"Action": ["sns:Publish"],
+							"Resource": "%s"
+						},
+						{
+							"Effect": "Allow",
 							"Action": [
 								"secretsmanager:GetSecretValue"
 							],
 							"Resource": "arn:aws:secretsmanager:*:*:secret:rez-agent/*"
 						}
 					]
-				}`, tableArn, tableArn, queueArn)
+				}`, tableArn, tableArn, queueArn, topicArn)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -606,12 +612,12 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/webaction.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME":          messagesTable.Name,
+					"DYNAMODB_TABLE_NAME":           messagesTable.Name,
 					"WEB_ACTION_RESULTS_TABLE_NAME": pulumi.String(fmt.Sprintf("rez-agent-web-action-results-%s", stage)),
-					"SNS_TOPIC_ARN":                messagesTopic.Arn,
-					"SQS_QUEUE_URL":                messagesQueue.Url,
-					"STAGE":                        pulumi.String(stage),
-					"GOLF_SECRET_NAME":             pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
+					"SNS_TOPIC_ARN":                 messagesTopic.Arn,
+					"SQS_QUEUE_URL":                 messagesQueue.Url,
+					"STAGE":                         pulumi.String(stage),
+					"GOLF_SECRET_NAME":              pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
 				},
 			},
 			MemorySize: pulumi.Int(512),

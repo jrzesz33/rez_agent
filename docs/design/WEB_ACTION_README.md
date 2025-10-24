@@ -219,7 +219,8 @@ Negligible cost due to low invocation frequency (60 messages/month).
       "auth_config": {
         "type": "none"
       },
-      "stage": "dev"
+      "stage": "dev",
+      "message_type":"web_action"
     }'
 
 ```
@@ -231,26 +232,26 @@ Negligible cost due to low invocation frequency (60 messages/month).
 **Schedule:** 5:15 AM EST daily
 
 ```json
-{
-  "version": "1.0",
-  "url": "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation",
-  "action": "fetch_golf_reservations",
-  "arguments": {
-    "golfer_id": "91124",
-    "page_size": 14,
-    "current_page": 1,
-    "max_results": 4
-  },
-  "auth_config": {
-    "type": "oauth_password",
-    "token_url": "https://birdsfoot.cps.golf/identityapi/connect/token",
-    "secret_name": "rez-agent/golf/credentials",
-    "scope": "openid profile onlinereservation...",
-    "headers": {
-      "client-id": "onlineresweb"
-    }
-  }
-}
+    curl -X POST $WEBAPI_URL/api/messages \
+      -H "Content-Type: application/json" \
+      -d '{
+    "version": "1.0",
+    "url": "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation",
+    "action": "golf",
+    "arguments": {
+      "max_results": 4
+    },
+    "auth_config": {
+      "type": "oauth_password",
+      "token_url": "https://birdsfoot.cps.golf/identityapi/connect/token",
+      "secret_name": "HIDE"
+    },
+    "stage": "dev",
+    "message_type":"web_action"
+  }'
+
+
+
 ```
 
 **Authentication:** OAuth 2.0 password grant flow

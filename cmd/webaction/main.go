@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -23,12 +24,12 @@ import (
 )
 
 type Handler struct {
-	messageRepo      repository.MessageRepository
-	resultRepo       repository.WebActionResultRepository
-	snsPublisher     messaging.SNSPublisher
-	handlerRegistry  *webaction.HandlerRegistry
-	sqsProcessor     *messaging.SQSBatchProcessor
-	logger           *slog.Logger
+	messageRepo     repository.MessageRepository
+	resultRepo      repository.WebActionResultRepository
+	snsPublisher    messaging.SNSPublisher
+	handlerRegistry *webaction.HandlerRegistry
+	sqsProcessor    *messaging.SQSBatchProcessor
+	logger          *slog.Logger
 }
 
 func main() {
@@ -173,7 +174,7 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 	}
 
 	// Mark result as successful
-	result.MarkSuccess(200, notificationMessage, executionTime.Milliseconds())
+	result.MarkSuccess(200, strings.Join(notificationMessage, "\n"), executionTime.Milliseconds())
 	if err := h.resultRepo.SaveResult(ctx, result); err != nil {
 		h.logger.Warn("failed to save successful result", slog.String("error", err.Error()))
 	}
@@ -183,13 +184,15 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 	if err := h.messageRepo.SaveMessage(ctx, message); err != nil {
 		h.logger.Warn("failed to update message status to completed", slog.String("error", err.Error()))
 	}
-
-	// Publish notification message
-	if err := h.publishNotification(ctx, message, notificationMessage); err != nil {
-		h.logger.Error("failed to publish notification",
-			slog.String("error", err.Error()),
-		)
-		// Don't return error - the web action succeeded even if notification failed
+	// Publish notification messages
+	for i := range notificationMessage {
+		// Publish notification message
+		if err := h.publishNotification(ctx, message, notificationMessage[i]); err != nil {
+			h.logger.Error("failed to publish notification",
+				slog.String("error", err.Error()),
+			)
+			// Don't return error - the web action succeeded even if notification failed
+		}
 	}
 
 	h.logger.Info("web action completed successfully",
@@ -202,11 +205,11 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 }
 
 // executeWebAction executes a web action using the appropriate handler
-func (h *Handler) executeWebAction(ctx context.Context, payload *models.WebActionPayload) (string, error) {
+func (h *Handler) executeWebAction(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
 	// Get handler for action type
 	handler, err := h.handlerRegistry.GetHandler(payload.Action)
 	if err != nil {
-		return "", fmt.Errorf("no handler available: %w", err)
+		return nil, fmt.Errorf("no handler available: %w", err)
 	}
 
 	// Execute action

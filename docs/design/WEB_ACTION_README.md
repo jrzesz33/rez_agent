@@ -223,6 +223,9 @@ Negligible cost due to low invocation frequency (60 messages/month).
       "message_type":"web_action"
     }'
 
+  curl -X POST $WEBAPI_URL/api/messages \
+    -H "Content-Type: application/json" \
+    -d @docs/test/messages/web_api_get_reservations.json
 ```
 
 **Output:** Detailed forecast for N days sent to ntfy.sh

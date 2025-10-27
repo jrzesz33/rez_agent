@@ -38,6 +38,8 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 
+	logger.Info("Web Action Function Starting...")
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -53,14 +55,19 @@ func main() {
 		logger.Error("failed to load AWS SDK config", slog.String("error", err.Error()))
 		panic(err)
 	}
+	logger.Info("Web Action Function Initialized Configuration")
 
 	// Initialize AWS clients
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	snsClient := sns.NewFromConfig(awsCfg)
 
+	logger.Info("Initialized AWS Clients")
+
 	// Initialize repositories
 	messageRepo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
 	resultRepo := repository.NewDynamoDBWebActionRepository(dynamoClient, cfg.WebActionResultsTableName)
+
+	logger.Info("Initialized Repositories")
 
 	// Initialize SNS publisher
 	snsPublisher := messaging.NewSNSClient(snsClient, cfg.SNSTopicArn, logger)
@@ -68,10 +75,14 @@ func main() {
 	// Initialize SQS processor
 	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
 
+	logger.Info("Initialized SNS & SQS")
+
 	// Initialize HTTP client and secrets manager
 	httpClient := httpclient.NewClient(logger)
 	secretsManager := secrets.NewManager(awsCfg, logger)
 	oauthClient := httpclient.NewOAuthClient(httpClient, secretsManager, logger)
+
+	logger.Info("Initialized HTTP Clients and Secrets Manager")
 
 	// Initialize action handler registry
 	handlerRegistry := webaction.NewHandlerRegistry(logger)

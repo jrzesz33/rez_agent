@@ -1,0 +1,20 @@
+{
+    "version": "1.0",
+    "url": "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation",
+    "action": "golf",
+    "arguments": {
+        "operation": "search_tee_times",
+        "searchDate": "Wed Oct 29 2025",
+        "startSearchTime": "2025-10-29T09:30:00",
+        "endSearchTime": "2025-10-29T16:30:00",
+        "autoBook": true
+    },
+    "auth_config": {
+        "type": "oauth_password",
+        "token_url": "https://birdsfoot.cps.golf/identityapi/connect/token",
+        "secret_name": "rez-agent/golf/credentials-prod",
+        "jwks_url": "https://birdsfoot.cps.golf/identityapi/.well-known/openid-configuration/jwks"
+    },
+    "stage": "dev",
+    "message_type": "web_action"
+}

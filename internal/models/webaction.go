@@ -74,6 +74,9 @@ type AuthConfig struct {
 	// TokenURL is the OAuth 2.0 token endpoint (for OAuth flows)
 	TokenURL string `json:"token_url,omitempty" dynamodbav:"token_url,omitempty"`
 
+	// JWKSURL is the JWKS endpoint for JWT verification (for OAuth flows)
+	JWKSURL string `json:"jwks_url,omitempty" dynamodbav:"jwks_url,omitempty"`
+
 	// Scope is the OAuth 2.0 scope (for OAuth flows)
 	Scope string `json:"scope,omitempty" dynamodbav:"scope,omitempty"`
 

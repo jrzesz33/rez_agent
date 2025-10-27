@@ -1,0 +1,15 @@
+{
+    "version": "1.0",
+    "url": "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation",
+    "action": "golf",
+    "arguments": {
+        "max_results": 4
+    },
+    "auth_config": {
+        "type": "oauth_password",
+        "token_url": "https://birdsfoot.cps.golf/identityapi/connect/token",
+        "secret_name": "rez-agent/golf/credentials-prod"
+    },
+    "stage": "dev",
+    "message_type": "web_action"
+}

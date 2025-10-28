@@ -77,7 +77,7 @@ func TestMessageType_IsValid(t *testing.T) {
 		want        bool
 	}{
 		{"hello_world is valid", MessageTypeHelloWorld, true},
-		{"manual is valid", MessageTypeManual, true},
+		{"notify is valid", MessageTypeNotification, true},
 		{"scheduled is valid", MessageTypeScheduled, true},
 		{"invalid type", MessageType("invalid"), false},
 	}

@@ -16,16 +16,16 @@ type Config struct {
 	AWSRegion string
 
 	// DynamoDB Configuration
-	DynamoDBTableName          string
-	WebActionResultsTableName  string
+	DynamoDBTableName         string
+	WebActionResultsTableName string
 
 	// SNS Configuration
-	SNSTopicArn           string
-	WebActionSNSTopicArn  string
+	WebActionsSNSTopicArn    string // Topic for web action messages
+	NotificationsSNSTopicArn string // Topic for notification messages
 
 	// SQS Configuration
-	SQSQueueURL           string
-	WebActionSQSQueueURL  string
+	NotificationSQSQueueURL string
+	WebActionSQSQueueURL    string
 
 	// Ntfy Configuration
 	NtfyURL string
@@ -64,17 +64,13 @@ func Load() (*Config, error) {
 		webActionResultsTableName = fmt.Sprintf("rez-agent-web-action-results-%s", stage)
 	}
 
-	snsTopicArn := os.Getenv("SNS_TOPIC_ARN")
-	if snsTopicArn == "" {
-		return nil, fmt.Errorf("SNS_TOPIC_ARN environment variable is required")
-	}
+	// Topic-based routing (for webapi Lambda)
+	webActionsSNSTopicArn := os.Getenv("WEB_ACTIONS_TOPIC_ARN")
+	notificationsSNSTopicArn := os.Getenv("NOTIFICATIONS_TOPIC_ARN")
 
-	// Web action SNS topic ARN (optional - only needed for webaction Lambda)
-	webActionSNSTopicArn := os.Getenv("WEB_ACTION_SNS_TOPIC_ARN")
-
-	sqsQueueURL := os.Getenv("SQS_QUEUE_URL")
-	if sqsQueueURL == "" {
-		return nil, fmt.Errorf("SQS_QUEUE_URL environment variable is required")
+	notificationSqsQueueURL := os.Getenv("NOTIFICATION_SQS_QUEUE_URL")
+	if notificationSqsQueueURL == "" {
+		return nil, fmt.Errorf("NOTIFICATION_SQS_QUEUE_URL environment variable is required")
 	}
 
 	// Web action SQS queue URL (optional - only needed for webaction Lambda)
@@ -95,9 +91,8 @@ func Load() (*Config, error) {
 		AWSRegion:                 awsRegion,
 		DynamoDBTableName:         dynamoDBTableName,
 		WebActionResultsTableName: webActionResultsTableName,
-		SNSTopicArn:               snsTopicArn,
-		WebActionSNSTopicArn:      webActionSNSTopicArn,
-		SQSQueueURL:               sqsQueueURL,
+		WebActionsSNSTopicArn:     webActionsSNSTopicArn,
+		NotificationsSNSTopicArn:  notificationsSNSTopicArn,
 		WebActionSQSQueueURL:      webActionSQSQueueURL,
 		NtfyURL:                   ntfyURL,
 		GolfSecretName:            golfSecretName,
@@ -129,16 +124,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("DynamoDB table name is required")
 	}
 
-	if c.SNSTopicArn == "" {
-		return fmt.Errorf("SNS topic ARN is required")
-	}
-
-	if c.SQSQueueURL == "" {
-		return fmt.Errorf("SQS queue URL is required")
-	}
-
 	if c.NtfyURL == "" {
-		return fmt.Errorf("Ntfy URL is required")
+		return fmt.Errorf("ntfy url is required")
 	}
 
 	return nil

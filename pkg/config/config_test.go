@@ -139,35 +139,35 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				Stage:             models.StageDev,
-				AWSRegion:         "us-east-1",
-				DynamoDBTableName: "test-table",
-				SNSTopicArn:       "arn:aws:sns:us-east-1:123456789012:test",
-				SQSQueueURL:       "https://sqs.us-east-1.amazonaws.com/123456789012/test",
-				NtfyURL:           "https://ntfy.sh/test",
+				Stage:                 models.StageDev,
+				AWSRegion:             "us-east-1",
+				DynamoDBTableName:     "test-table",
+				WebActionsSNSTopicArn: "arn:aws:sns:us-east-1:123456789012:test",
+				WebActionSQSQueueURL:  "https://sqs.us-east-1.amazonaws.com/123456789012/test",
+				NtfyURL:               "https://ntfy.sh/test",
 			},
 			wantErr: false,
 		},
 		{
 			name: "invalid stage",
 			config: &Config{
-				Stage:             models.Stage("invalid"),
-				AWSRegion:         "us-east-1",
-				DynamoDBTableName: "test-table",
-				SNSTopicArn:       "arn:aws:sns:us-east-1:123456789012:test",
-				SQSQueueURL:       "https://sqs.us-east-1.amazonaws.com/123456789012/test",
-				NtfyURL:           "https://ntfy.sh/test",
+				Stage:                 models.Stage("invalid"),
+				AWSRegion:             "us-east-1",
+				DynamoDBTableName:     "test-table",
+				WebActionsSNSTopicArn: "arn:aws:sns:us-east-1:123456789012:test",
+				WebActionSQSQueueURL:  "https://sqs.us-east-1.amazonaws.com/123456789012/test",
+				NtfyURL:               "https://ntfy.sh/test",
 			},
 			wantErr: true,
 		},
 		{
 			name: "missing aws region",
 			config: &Config{
-				Stage:             models.StageDev,
-				DynamoDBTableName: "test-table",
-				SNSTopicArn:       "arn:aws:sns:us-east-1:123456789012:test",
-				SQSQueueURL:       "https://sqs.us-east-1.amazonaws.com/123456789012/test",
-				NtfyURL:           "https://ntfy.sh/test",
+				Stage:                 models.StageDev,
+				DynamoDBTableName:     "test-table",
+				WebActionsSNSTopicArn: "arn:aws:sns:us-east-1:123456789012:test",
+				WebActionSQSQueueURL:  "https://sqs.us-east-1.amazonaws.com/123456789012/test",
+				NtfyURL:               "https://ntfy.sh/test",
 			},
 			wantErr: true,
 		},
@@ -185,11 +185,11 @@ func TestConfig_Validate(t *testing.T) {
 
 func TestConfig_EnvironmentChecks(t *testing.T) {
 	tests := []struct {
-		name           string
-		stage          models.Stage
-		isDevelopment  bool
-		isStaging      bool
-		isProduction   bool
+		name          string
+		stage         models.Stage
+		isDevelopment bool
+		isStaging     bool
+		isProduction  bool
 	}{
 		{"dev environment", models.StageDev, true, false, false},
 		{"staging environment", models.StageStage, false, true, false},

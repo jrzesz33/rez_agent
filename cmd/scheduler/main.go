@@ -133,7 +133,7 @@ func main() {
 
 	// Create repository and publisher
 	repo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
-	publisher := messaging.NewSNSClient(snsClient, cfg.SNSTopicArn, logger)
+	publisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, logger)
 
 	// Create handler
 	handler := NewSchedulerHandler(cfg, repo, publisher, logger)

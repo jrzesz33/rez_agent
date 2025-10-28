@@ -291,19 +291,15 @@ func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.
 
 	// If auto-book and tee times found, book the first one
 	if params.AutoBook && len(teeTimeSlots) > 0 && claims != nil {
+
 		h.logger.Info("auto-booking tee time for...", slog.Int("teeSheetId", teeTimeSlots[0].TeeSheetID))
-		/*bookParams := models.BookTeeTimeParams{
-			TeeSheetID:     teeTimeSlots[0].TeeSheetID,
-			NumberOfPlayer: params.NumberOfPlayer,
-			SearchDate:     params.SearchDate,
-		}*/
 
 		// Create a new payload for booking
 		bookPayload := *payload
 		bookPayload.Arguments = map[string]interface{}{
-			"teeSheetId":     teeTimeSlots[0].TeeSheetID,
-			"numberOfPlayer": params.NumberOfPlayer,
-			"searchDate":     params.SearchDate,
+			"teeSheetId":      teeTimeSlots[0].TeeSheetID,
+			"numberOfPlayer":  params.NumberOfPlayer,
+			"startSearchTime": params.StartSearchTime,
 		}
 
 		return h.handleBookTeeTime(ctx, &bookPayload, accessToken, claims)
@@ -320,13 +316,6 @@ func (h *GolfHandler) parseSearchTeeTimesParams(args map[string]interface{}) (*m
 		AutoBook:       false,
 	}
 
-	// Extract search date (required)
-	if searchDate, ok := args["searchDate"].(string); ok {
-		params.SearchDate = searchDate
-	} else {
-		return nil, fmt.Errorf("searchDate is required")
-	}
-
 	// Extract number of players (optional, default 1)
 	if numPlayers, ok := args["numberOfPlayer"].(float64); ok {
 		params.NumberOfPlayer = int(numPlayers)
@@ -335,6 +324,14 @@ func (h *GolfHandler) parseSearchTeeTimesParams(args map[string]interface{}) (*m
 	// Extract start time (optional)
 	if startTime, ok := args["startSearchTime"].(string); ok && startTime != "" {
 		params.StartSearchTime = &startTime
+		_searchDate, err := time.Parse("2006-01-02T15:04:05", startTime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid startSearchTime format: %w", err)
+		}
+		params.SearchDate = _searchDate.Format("Mon Jan 2 2006")
+
+	} else {
+		return nil, fmt.Errorf("startSearchTime is required")
 	}
 
 	// Extract end time (optional)
@@ -513,6 +510,9 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		slog.String("transaction_id", pricingResp.TransactionID),
 		slog.Float64("total", pricingResp.SummaryDetail.Total))
 
+	// Pause execution for 3 seconds
+	time.Sleep(3 * time.Second)
+
 	// Step 3: Reserve tee time
 	reserveResp, err := h.reserveTeeTime(ctx, accessToken, claims, lockResp.SessionID, pricingResp.TransactionID)
 	if err != nil {
@@ -533,22 +533,34 @@ func (h *GolfHandler) parseBookTeeTimeParams(args map[string]interface{}) (*mode
 		NumberOfPlayer: 1, // Default
 	}
 
-	// Extract teeSheetId (required)teeSheetId
-	if teeSheetID, ok := args["teeSheetId"].(int); ok {
+	// Extract teeSheetId (required)
+	// Handle both int and float64 (JSON unmarshals numbers as float64)
+	if teeSheetID, ok := args["teeSheetId"].(float64); ok {
 		params.TeeSheetID = int(teeSheetID)
+	} else if teeSheetID, ok := args["teeSheetId"].(int); ok {
+		params.TeeSheetID = teeSheetID
 	} else {
 		return nil, fmt.Errorf("teeSheetId is required")
 	}
 
 	// Extract number of players (optional, default 1)
-	if numPlayers, ok := args["numberOfPlayer"].(int); ok {
+	// Handle both int and float64 (JSON unmarshals numbers as float64)
+	if numPlayers, ok := args["numberOfPlayer"].(float64); ok {
 		params.NumberOfPlayer = int(numPlayers)
+	} else if numPlayers, ok := args["numberOfPlayer"].(int); ok {
+		params.NumberOfPlayer = numPlayers
 	}
 
-	// Extract search date for context
-	if searchDate, ok := args["searchDate"].(string); ok {
-		params.SearchDate = searchDate
-	}
+	/*if startTime, ok := args["startSearchTime"].(string); ok && startTime != "" {
+		_searchDate, err := time.Parse("2006-01-02T15:04:05", startTime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid startSearchTime format: %w", err)
+		}
+		params.SearchDate = _searchDate.Format("Mon Jan 2 2006")
+
+	} else {
+		return nil, fmt.Errorf("startSearchTime is required")
+	}*/
 
 	// Validate
 	if params.TeeSheetID <= 0 {
@@ -612,6 +624,9 @@ func (h *GolfHandler) lockTeeTime(ctx context.Context, params *models.BookTeeTim
 	}
 	if strings.Contains(lockResp.Warning, "already have a reservation") {
 		return nil, fmt.Errorf("reservation conflict: %s", lockResp.Warning)
+	}
+	if lockResp.Error != "" {
+		return nil, fmt.Errorf("issue with locking a tee time: %s", lockResp.Error)
 	}
 
 	return &lockResp, nil
@@ -741,6 +756,7 @@ func (h *GolfHandler) reserveTeeTime(ctx context.Context, accessToken string, cl
 		"x-timezone-offset":  "240",
 		"x-timezoneid":       "America/New_York",
 	}
+	h.logger.Warn("reserve request", slog.String("body", fmt.Sprint(reserveReq)), slog.String("header", fmt.Sprint(headers)))
 
 	resp, err := h.httpClient.Do(ctx, httpclient.RequestConfig{
 		Method:  "POST",

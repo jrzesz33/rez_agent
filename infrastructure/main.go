@@ -85,10 +85,33 @@ func main() {
 		}
 
 		// ========================================
-		// SNS Topic
+		// DynamoDB Table for Web Action Results
 		// ========================================
-		messagesTopic, err := sns.NewTopic(ctx, fmt.Sprintf("rez-agent-messages-%s", stage), &sns.TopicArgs{
-			Name: pulumi.String(fmt.Sprintf("rez-agent-messages-%s", stage)),
+		webActionResultsTable, err := dynamodb.NewTable(ctx, fmt.Sprintf("rez-agent-web-action-results-%s", stage), &dynamodb.TableArgs{
+			Name:        pulumi.String(fmt.Sprintf("rez-agent-web-action-results-%s", stage)),
+			BillingMode: pulumi.String("PAY_PER_REQUEST"),
+			HashKey:     pulumi.String("id"),
+			Attributes: dynamodb.TableAttributeArray{
+				&dynamodb.TableAttributeArgs{
+					Name: pulumi.String("id"),
+					Type: pulumi.String("S"),
+				},
+				&dynamodb.TableAttributeArgs{
+					Name: pulumi.String("message_id"),
+					Type: pulumi.String("S"),
+				},
+			},
+			GlobalSecondaryIndexes: dynamodb.TableGlobalSecondaryIndexArray{
+				&dynamodb.TableGlobalSecondaryIndexArgs{
+					Name:           pulumi.String("message_id-index"),
+					HashKey:        pulumi.String("message_id"),
+					ProjectionType: pulumi.String("ALL"),
+				},
+			},
+			Ttl: &dynamodb.TableTtlArgs{
+				AttributeName: pulumi.String("ttl"),
+				Enabled:       pulumi.Bool(true),
+			},
 			Tags: commonTags,
 		})
 		if err != nil {
@@ -96,11 +119,34 @@ func main() {
 		}
 
 		// ========================================
-		// SQS Queues (Main Queue + DLQ)
+		// SNS Topics (Topic-based routing)
 		// ========================================
-		// Dead Letter Queue
-		dlq, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-messages-dlq-%s", stage), &sqs.QueueArgs{
-			Name:                    pulumi.String(fmt.Sprintf("rez-agent-messages-dlq-%s", stage)),
+
+		// Web Actions Topic
+		webActionsTopic, err := sns.NewTopic(ctx, fmt.Sprintf("rez-agent-web-actions-%s", stage), &sns.TopicArgs{
+			Name: pulumi.String(fmt.Sprintf("rez-agent-web-actions-%s", stage)),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Notifications Topic (for scheduler, manual messages, etc.)
+		notificationsTopic, err := sns.NewTopic(ctx, fmt.Sprintf("rez-agent-notifications-%s", stage), &sns.TopicArgs{
+			Name: pulumi.String(fmt.Sprintf("rez-agent-notifications-%s", stage)),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// ========================================
+		// SQS Queues (Separate queues per message type)
+		// ========================================
+
+		// Dead Letter Queues
+		webActionsDlq, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-web-actions-dlq-%s", stage), &sqs.QueueArgs{
+			Name:                    pulumi.String(fmt.Sprintf("rez-agent-web-actions-dlq-%s", stage)),
 			MessageRetentionSeconds: pulumi.Int(1209600), // 14 days
 			Tags:                    commonTags,
 		})
@@ -108,12 +154,21 @@ func main() {
 			return err
 		}
 
-		// Main Queue
-		messagesQueue, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-messages-%s", stage), &sqs.QueueArgs{
-			Name:                     pulumi.String(fmt.Sprintf("rez-agent-messages-%s", stage)),
+		notificationsDlq, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-notifications-dlq-%s", stage), &sqs.QueueArgs{
+			Name:                    pulumi.String(fmt.Sprintf("rez-agent-notifications-dlq-%s", stage)),
+			MessageRetentionSeconds: pulumi.Int(1209600), // 14 days
+			Tags:                    commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Web Actions Queue
+		webActionsQueue, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-web-actions-%s", stage), &sqs.QueueArgs{
+			Name:                     pulumi.String(fmt.Sprintf("rez-agent-web-actions-%s", stage)),
 			VisibilityTimeoutSeconds: pulumi.Int(300),     // 5 minutes
 			MessageRetentionSeconds:  pulumi.Int(1209600), // 14 days
-			RedrivePolicy: dlq.Arn.ApplyT(func(arn string) string {
+			RedrivePolicy: webActionsDlq.Arn.ApplyT(func(arn string) string {
 				return fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":3}`, arn)
 			}).(pulumi.StringOutput),
 			Tags: commonTags,
@@ -122,21 +177,78 @@ func main() {
 			return err
 		}
 
-		// SNS to SQS Subscription
-		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-messages-subscription-%s", stage), &sns.TopicSubscriptionArgs{
-			Topic:              messagesTopic.Arn,
-			Protocol:           pulumi.String("sqs"),
-			Endpoint:           messagesQueue.Arn,
-			RawMessageDelivery: pulumi.Bool(true), // Deliver raw message without SNS envelope
+		// Notifications Queue
+		notificationsQueue, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-notifications-%s", stage), &sqs.QueueArgs{
+			Name:                     pulumi.String(fmt.Sprintf("rez-agent-notifications-%s", stage)),
+			VisibilityTimeoutSeconds: pulumi.Int(300),     // 5 minutes
+			MessageRetentionSeconds:  pulumi.Int(1209600), // 14 days
+			RedrivePolicy: notificationsDlq.Arn.ApplyT(func(arn string) string {
+				return fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":3}`, arn)
+			}).(pulumi.StringOutput),
+			Tags: commonTags,
 		})
 		if err != nil {
 			return err
 		}
 
-		// SQS Queue Policy to allow SNS to send messages
-		queuePolicy, err := sqs.NewQueuePolicy(ctx, fmt.Sprintf("rez-agent-messages-queue-policy-%s", stage), &sqs.QueuePolicyArgs{
-			QueueUrl: messagesQueue.Url,
-			Policy: pulumi.All(messagesQueue.Arn, messagesTopic.Arn).ApplyT(func(args []interface{}) string {
+		// ========================================
+		// SNS to SQS Subscriptions
+		// ========================================
+
+		// Web Actions Topic -> Web Actions Queue
+		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-web-actions-subscription-%s", stage), &sns.TopicSubscriptionArgs{
+			Topic:              webActionsTopic.Arn,
+			Protocol:           pulumi.String("sqs"),
+			Endpoint:           webActionsQueue.Arn,
+			RawMessageDelivery: pulumi.Bool(true),
+		})
+		if err != nil {
+			return err
+		}
+
+		// Notifications Topic -> Notifications Queue
+		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-notifications-subscription-%s", stage), &sns.TopicSubscriptionArgs{
+			Topic:              notificationsTopic.Arn,
+			Protocol:           pulumi.String("sqs"),
+			Endpoint:           notificationsQueue.Arn,
+			RawMessageDelivery: pulumi.Bool(true),
+		})
+		if err != nil {
+			return err
+		}
+
+		// ========================================
+		// SQS Queue Policies
+		// ========================================
+
+		// Web Actions Queue Policy
+		qPolicy, err := sqs.NewQueuePolicy(ctx, fmt.Sprintf("rez-agent-web-actions-queue-policy-%s", stage), &sqs.QueuePolicyArgs{
+			QueueUrl: webActionsQueue.Url,
+			Policy: pulumi.All(webActionsQueue.Arn, webActionsTopic.Arn).ApplyT(func(args []interface{}) string {
+				queueArn := args[0].(string)
+				topicArn := args[1].(string)
+				return fmt.Sprintf(`{
+					"Version": "2012-10-17",
+					"Statement": [{
+						"Effect": "Allow",
+						"Principal": {"Service": "sns.amazonaws.com"},
+						"Action": "sqs:SendMessage",
+						"Resource": "%s",
+						"Condition": {
+							"ArnEquals": {"aws:SourceArn": "%s"}
+						}
+					}]
+				}`, queueArn, topicArn)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
+		// Notifications Queue Policy
+		nPolicy, err := sqs.NewQueuePolicy(ctx, fmt.Sprintf("rez-agent-notifications-queue-policy-%s", stage), &sqs.QueuePolicyArgs{
+			QueueUrl: notificationsQueue.Url,
+			Policy: pulumi.All(notificationsQueue.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
 				queueArn := args[0].(string)
 				topicArn := args[1].(string)
 				return fmt.Sprintf(`{
@@ -194,7 +306,7 @@ func main() {
 		// Scheduler Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-scheduler-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: schedulerRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, messagesTopic.Arn).ApplyT(func(args []interface{}) string {
+			Policy: pulumi.All(messagesTable.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
 				tableArn := args[0].(string)
 				topicArn := args[1].(string)
 				return fmt.Sprintf(`{
@@ -258,7 +370,7 @@ func main() {
 		// Processor Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-processor-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: processorRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, messagesQueue.Arn).ApplyT(func(args []interface{}) string {
+			Policy: pulumi.All(messagesTable.Arn, notificationsQueue.Arn).ApplyT(func(args []interface{}) string {
 				tableArn := args[0].(string)
 				queueArn := args[1].(string)
 				return fmt.Sprintf(`{
@@ -335,9 +447,10 @@ func main() {
 		// WebAPI Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-webapi-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: webapiRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, messagesTopic.Arn).ApplyT(func(args []interface{}) string {
+			Policy: pulumi.All(messagesTable.Arn, webActionsTopic.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
 				tableArn := args[0].(string)
-				topicArn := args[1].(string)
+				webActionsTopicArn := args[1].(string)
+				notificationsTopicArn := args[2].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -354,7 +467,7 @@ func main() {
 						{
 							"Effect": "Allow",
 							"Action": ["sns:Publish"],
-							"Resource": "%s"
+							"Resource": ["%s", "%s"]
 						},
 						{
 							"Effect": "Allow",
@@ -374,7 +487,7 @@ func main() {
 							"Resource": "*"
 						}
 					]
-				}`, tableArn, tableArn, topicArn)
+				}`, tableArn, tableArn, webActionsTopicArn, notificationsTopicArn)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -424,9 +537,12 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/scheduler.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME": messagesTable.Name,
-					"SNS_TOPIC_ARN":       messagesTopic.Arn,
-					"STAGE":               pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
+					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
+					"STAGE":                      pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -449,11 +565,13 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/processor.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME": messagesTable.Name,
-					"SNS_TOPIC_ARN":       messagesTopic.Arn,
-					"SQS_QUEUE_URL":       messagesQueue.Url,
-					"NTFY_URL":            pulumi.String(ntfyUrl),
-					"STAGE":               pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
+					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
+					"NTFY_URL":                   pulumi.String(ntfyUrl),
+					"STAGE":                      pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(512),
@@ -467,21 +585,14 @@ func main() {
 			return err
 		}
 
-		// SQS Event Source Mapping for Processor Lambda
+		// SQS Event Source Mapping for Processor Lambda (Notifications Queue)
 		_, err = lambda.NewEventSourceMapping(ctx, fmt.Sprintf("rez-agent-processor-sqs-trigger-%s", stage), &lambda.EventSourceMappingArgs{
-			EventSourceArn: messagesQueue.Arn,
+			EventSourceArn: notificationsQueue.Arn,
 			FunctionName:   processorLambda.Arn,
 			BatchSize:      pulumi.Int(10),
 			Enabled:        pulumi.Bool(true),
-			FilterCriteria: &lambda.EventSourceMappingFilterCriteriaArgs{
-				Filters: lambda.EventSourceMappingFilterCriteriaFilterArray{
-					&lambda.EventSourceMappingFilterCriteriaFilterArgs{
-						// Filter to exclude web_action messages (those go to webaction Lambda)
-						Pattern: pulumi.String(`{"body": {"message_type": [{"anything-but": ["web_action"]}]}}`),
-					},
-				},
-			},
-		}, pulumi.DependsOn([]pulumi.Resource{queuePolicy}))
+			// No filter criteria needed - dedicated queue for notifications
+		}, pulumi.DependsOn([]pulumi.Resource{nPolicy}))
 		if err != nil {
 			return err
 		}
@@ -495,10 +606,12 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/webapi.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME": messagesTable.Name,
-					"SNS_TOPIC_ARN":       messagesTopic.Arn,
-					"SQS_QUEUE_URL":       messagesQueue.Url,
-					"STAGE":               pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
+					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
+					"STAGE":                      pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -545,10 +658,13 @@ func main() {
 		// WebAction Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-webaction-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: webactionRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, messagesQueue.Arn, messagesTopic.Arn).ApplyT(func(args []interface{}) string {
+			Policy: pulumi.All(messagesTable.Arn, webActionResultsTable.Arn, webActionsQueue.Arn, webActionsTopic.Arn, notificationsQueue.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
 				tableArn := args[0].(string)
-				queueArn := args[1].(string)
-				topicArn := args[2].(string)
+				webActionResultsArn := args[1].(string)
+				waQueueArn := args[2].(string)
+				waTtopicArn := args[3].(string)
+				noQueueArn := args[4].(string)
+				noTtopicArn := args[5].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -567,16 +683,28 @@ func main() {
 						{
 							"Effect": "Allow",
 							"Action": [
+								"dynamodb:PutItem",
+								"dynamodb:GetItem",
+								"dynamodb:Query"
+							],
+							"Resource": [
+								"%s",
+								"%s/*"
+							]
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
 								"sqs:ReceiveMessage",
 								"sqs:DeleteMessage",
 								"sqs:GetQueueAttributes"
 							],
-							"Resource": "%s"
+							"Resource": ["%s","%s"]
 						},
 						{
 							"Effect": "Allow",
 							"Action": ["sns:Publish"],
-							"Resource": "%s"
+							"Resource": ["%s","%s"]
 						},
 						{
 							"Effect": "Allow",
@@ -586,7 +714,7 @@ func main() {
 							"Resource": "arn:aws:secretsmanager:*:*:secret:rez-agent/*"
 						}
 					]
-				}`, tableArn, tableArn, queueArn, topicArn)
+				}`, tableArn, tableArn, webActionResultsArn, webActionResultsArn, waQueueArn, noQueueArn, waTtopicArn, noTtopicArn)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -612,12 +740,13 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/webaction.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME":           messagesTable.Name,
-					"WEB_ACTION_RESULTS_TABLE_NAME": pulumi.String(fmt.Sprintf("rez-agent-web-action-results-%s", stage)),
-					"SNS_TOPIC_ARN":                 messagesTopic.Arn,
-					"SQS_QUEUE_URL":                 messagesQueue.Url,
-					"STAGE":                         pulumi.String(stage),
-					"GOLF_SECRET_NAME":              pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
+					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
+					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
+					"STAGE":                      pulumi.String(stage),
+					"GOLF_SECRET_NAME":           pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
 				},
 			},
 			MemorySize: pulumi.Int(512),
@@ -631,20 +760,14 @@ func main() {
 			return err
 		}
 
-		// WebAction Lambda SQS Event Source Mapping
+		// WebAction Lambda SQS Event Source Mapping (Web Actions Queue)
 		_, err = lambda.NewEventSourceMapping(ctx, fmt.Sprintf("rez-agent-webaction-sqs-trigger-%s", stage), &lambda.EventSourceMappingArgs{
-			EventSourceArn: messagesQueue.Arn,
+			EventSourceArn: webActionsQueue.Arn,
 			FunctionName:   webactionLambda.Arn,
 			BatchSize:      pulumi.Int(1),
 			Enabled:        pulumi.Bool(true),
-			FilterCriteria: &lambda.EventSourceMappingFilterCriteriaArgs{
-				Filters: lambda.EventSourceMappingFilterCriteriaFilterArray{
-					&lambda.EventSourceMappingFilterCriteriaFilterArgs{
-						Pattern: pulumi.String(`{"body": {"message_type": ["web_action"]}}`),
-					},
-				},
-			},
-		}, pulumi.DependsOn([]pulumi.Resource{queuePolicy}))
+			// No filter criteria needed - dedicated queue for web actions
+		}, pulumi.DependsOn([]pulumi.Resource{qPolicy}))
 		if err != nil {
 			return err
 		}
@@ -779,26 +902,6 @@ func main() {
 		// CloudWatch Alarms
 		// ========================================
 
-		// DLQ Alarm
-		_, err = cloudwatch.NewMetricAlarm(ctx, fmt.Sprintf("rez-agent-dlq-alarm-%s", stage), &cloudwatch.MetricAlarmArgs{
-			Name:               pulumi.String(fmt.Sprintf("rez-agent-dlq-messages-%s", stage)),
-			ComparisonOperator: pulumi.String("GreaterThanThreshold"),
-			EvaluationPeriods:  pulumi.Int(1),
-			MetricName:         pulumi.String("ApproximateNumberOfMessagesVisible"),
-			Namespace:          pulumi.String("AWS/SQS"),
-			Period:             pulumi.Int(300),
-			Statistic:          pulumi.String("Average"),
-			Threshold:          pulumi.Float64(1),
-			AlarmDescription:   pulumi.String("Alert when messages appear in DLQ"),
-			Dimensions: pulumi.StringMap{
-				"QueueName": dlq.Name,
-			},
-			Tags: commonTags,
-		})
-		if err != nil {
-			return err
-		}
-
 		// Processor Lambda Error Alarm
 		_, err = cloudwatch.NewMetricAlarm(ctx, fmt.Sprintf("rez-agent-processor-errors-%s", stage), &cloudwatch.MetricAlarmArgs{
 			Name:               pulumi.String(fmt.Sprintf("rez-agent-processor-errors-%s", stage)),
@@ -822,17 +925,36 @@ func main() {
 		// ========================================
 		// Exports
 		// ========================================
+		// Stack Outputs
+		// ========================================
+
+		// DynamoDB
 		ctx.Export("dynamodbTableName", messagesTable.Name)
 		ctx.Export("dynamodbTableArn", messagesTable.Arn)
-		ctx.Export("snsTopicArn", messagesTopic.Arn)
-		ctx.Export("sqsQueueUrl", messagesQueue.Url)
-		ctx.Export("sqsQueueArn", messagesQueue.Arn)
-		ctx.Export("dlqUrl", dlq.Url)
-		ctx.Export("dlqArn", dlq.Arn)
+
+		// SNS Topics
+		ctx.Export("webActionsTopicArn", webActionsTopic.Arn)
+		ctx.Export("notificationsTopicArn", notificationsTopic.Arn)
+
+		// SQS Queues
+		ctx.Export("webActionsQueueUrl", webActionsQueue.Url)
+		ctx.Export("webActionsQueueArn", webActionsQueue.Arn)
+		ctx.Export("notificationsQueueUrl", notificationsQueue.Url)
+		ctx.Export("notificationsQueueArn", notificationsQueue.Arn)
+
+		// Dead Letter Queues
+		ctx.Export("webActionsDlqUrl", webActionsDlq.Url)
+		ctx.Export("webActionsDlqArn", webActionsDlq.Arn)
+		ctx.Export("notificationsDlqUrl", notificationsDlq.Url)
+		ctx.Export("notificationsDlqArn", notificationsDlq.Arn)
+
+		// Lambda Functions
 		ctx.Export("schedulerLambdaArn", schedulerLambda.Arn)
 		ctx.Export("processorLambdaArn", processorLambda.Arn)
 		ctx.Export("webactionLambdaArn", webactionLambda.Arn)
 		ctx.Export("webapiLambdaArn", webapiLambda.Arn)
+
+		// API Gateway
 		ctx.Export("apiGatewayId", httpApi.ID())
 		ctx.Export("apiGatewayEndpoint", httpApi.ApiEndpoint)
 		ctx.Export("webapiUrl", httpApi.ApiEndpoint)

@@ -115,7 +115,7 @@ func (h *WebAPIHandler) handleHealth(ctx context.Context) (events.APIGatewayV2HT
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"stage":     h.config.Stage.String(),
 	}
-
+	fmt.Println(ctx)
 	body, err := json.Marshal(health)
 	if err != nil {
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal health response"), err
@@ -193,11 +193,11 @@ type CreateMessageRequest struct {
 	Stage       models.Stage       `json:"stage,omitempty"`
 
 	// Web action fields (embedded from WebActionPayload)
-	Version    string                    `json:"version,omitempty"`
-	URL        string                    `json:"url,omitempty"`
-	Action     models.WebActionType      `json:"action,omitempty"`
-	Arguments  map[string]interface{}    `json:"arguments,omitempty"`
-	AuthConfig *models.AuthConfig        `json:"auth_config,omitempty"`
+	Version    string                 `json:"version,omitempty"`
+	URL        string                 `json:"url,omitempty"`
+	Action     models.WebActionType   `json:"action,omitempty"`
+	Arguments  map[string]interface{} `json:"arguments,omitempty"`
+	AuthConfig *models.AuthConfig     `json:"auth_config,omitempty"`
 }
 
 // handleCreateMessage creates a new message manually
@@ -238,7 +238,7 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 		if isWebAction {
 			messageType = models.MessageTypeWebAction
 		} else {
-			messageType = models.MessageTypeManual
+			messageType = models.MessageTypeNotification
 		}
 	}
 
@@ -330,10 +330,10 @@ func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayV2H
 
 	// Calculate metrics
 	metrics := map[string]interface{}{
-		"total":      len(allMessages),
-		"by_status":  make(map[string]int),
-		"by_stage":   make(map[string]int),
-		"by_type":    make(map[string]int),
+		"total":     len(allMessages),
+		"by_status": make(map[string]int),
+		"by_stage":  make(map[string]int),
+		"by_type":   make(map[string]int),
 	}
 
 	byStatus := make(map[string]int)
@@ -364,8 +364,8 @@ func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayV2H
 // createErrorResponse creates a standardized error response
 func (h *WebAPIHandler) createErrorResponse(statusCode int, message string) events.APIGatewayV2HTTPResponse {
 	errorBody := map[string]string{
-		"error":   message,
-		"status":  strconv.Itoa(statusCode),
+		"error":  message,
+		"status": strconv.Itoa(statusCode),
 	}
 	body, _ := json.Marshal(errorBody)
 
@@ -405,7 +405,18 @@ func main() {
 
 	// Create repository and publisher
 	repo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
-	publisher := messaging.NewSNSClient(snsClient, cfg.SNSTopicArn, logger)
+
+	// Use topic routing if both topics are configured, otherwise fall back to legacy single topic
+	publisher := messaging.NewTopicRoutingSNSClient(
+		snsClient,
+		cfg.WebActionsSNSTopicArn,
+		cfg.NotificationsSNSTopicArn,
+		logger,
+	)
+	logger.Info("using topic-routing SNS client",
+		slog.String("web_actions_topic", cfg.WebActionsSNSTopicArn),
+		slog.String("notifications_topic", cfg.NotificationsSNSTopicArn),
+	)
 
 	// Create handler
 	handler := NewWebAPIHandler(cfg, repo, publisher, logger)

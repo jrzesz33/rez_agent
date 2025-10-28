@@ -70,7 +70,7 @@ func main() {
 	logger.Info("Initialized Repositories")
 
 	// Initialize SNS publisher
-	snsPublisher := messaging.NewSNSClient(snsClient, cfg.SNSTopicArn, logger)
+	snsPublisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, logger)
 
 	// Initialize SQS processor
 	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
@@ -233,7 +233,7 @@ func (h *Handler) publishNotification(ctx context.Context, originalMessage *mode
 	notificationMsg := models.NewMessage(
 		"web-action-processor",
 		originalMessage.Stage,
-		models.MessageTypeScheduled,
+		models.MessageTypeNotification,
 		notificationContent,
 	)
 

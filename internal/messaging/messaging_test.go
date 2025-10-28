@@ -11,21 +11,6 @@ import (
 	"github.com/jrzesz33/rez_agent/internal/models"
 )
 
-func TestNewSNSClient(t *testing.T) {
-	topicArn := "arn:aws:sns:us-east-1:123456789012:test-topic"
-	client := NewSNSClient(nil, topicArn, nil)
-
-	if client == nil {
-		t.Fatal("NewSNSClient() returned nil")
-	}
-	if client.topicArn != topicArn {
-		t.Errorf("topicArn = %v, want %v", client.topicArn, topicArn)
-	}
-	if client.logger == nil {
-		t.Error("logger should not be nil when default is used")
-	}
-}
-
 func TestNewSQSBatchProcessor(t *testing.T) {
 	processor := NewSQSBatchProcessor(nil)
 
@@ -119,10 +104,10 @@ func TestSQSBatchProcessor_ProcessBatch(t *testing.T) {
 	snsWrapperJSON, _ := json.Marshal(snsWrapper)
 
 	tests := []struct {
-		name              string
-		event             events.SQSEvent
-		handler           func(context.Context, *models.Message) error
-		wantFailureCount  int
+		name             string
+		event            events.SQSEvent
+		handler          func(context.Context, *models.Message) error
+		wantFailureCount int
 	}{
 		{
 			name: "all messages succeed",
@@ -194,9 +179,4 @@ func TestSQSBatchProcessor_ProcessBatch(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSNSClient_Interface(t *testing.T) {
-	// Verify that SNSClient implements SNSPublisher interface
-	var _ SNSPublisher = (*SNSClient)(nil)
 }

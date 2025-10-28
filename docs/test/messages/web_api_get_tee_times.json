@@ -4,9 +4,8 @@
     "action": "golf",
     "arguments": {
         "operation": "search_tee_times",
-        "searchDate": "Wed Oct 29 2025",
-        "startSearchTime": "2025-10-29T09:30:00",
-        "endSearchTime": "2025-10-29T16:30:00",
+        "startSearchTime": "2025-10-30T09:30:00",
+        "endSearchTime": "2025-10-30T16:30:00",
         "autoBook": true
     },
     "auth_config": {

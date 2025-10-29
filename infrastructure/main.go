@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"runtime/debug"
 
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/apigatewayv2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/cloudwatch"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/dynamodb"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/iam"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/lambda"
+	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/s3"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/scheduler"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/sns"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/sqs"
@@ -17,14 +20,48 @@ import (
 )
 
 func main() {
-	pulumi.Run(func(ctx *pulumi.Context) error {
+	pulumi.Run(func(ctx *pulumi.Context) (err error) {
+		// Add panic recovery with detailed logging
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("PANIC RECOVERED: %v", r)
+				log.Printf("Stack trace:\n%s", debug.Stack())
+				err = fmt.Errorf("panic occurred: %v", r)
+			}
+		}()
+
+		log.Printf("Starting Pulumi infrastructure deployment...")
 		// Load configuration
 		cfg := config.New(ctx, "")
-		stage := cfg.Require("stage")
-		ntfyUrl := cfg.Require("ntfyUrl")
-		logRetentionDays := cfg.RequireInt("logRetentionDays")
-		enableXRay := cfg.RequireBool("enableXRay")
-		schedulerCron := cfg.Require("schedulerCron")
+
+		log.Printf("Loading configuration values...")
+		stage := cfg.Get("stage")
+		if stage == "" {
+			stage = "dev"
+			log.Printf("Using default stage: %s", stage)
+		}
+
+		ntfyUrl := cfg.Get("ntfyUrl")
+		if ntfyUrl == "" {
+			return fmt.Errorf("required config 'ntfyUrl' is missing")
+		}
+
+		logRetentionDays := cfg.GetInt("logRetentionDays")
+		if logRetentionDays == 0 {
+			logRetentionDays = 7
+			log.Printf("Using default logRetentionDays: %d", logRetentionDays)
+		}
+
+		enableXRay := cfg.GetBool("enableXRay")
+		log.Printf("X-Ray tracing enabled: %v", enableXRay)
+
+		schedulerCron := cfg.Get("schedulerCron")
+		if schedulerCron == "" {
+			schedulerCron = "cron(0 12 * * ? *)" // Default: daily at noon UTC
+			log.Printf("Using default schedulerCron: %s", schedulerCron)
+		}
+
+		log.Printf("Configuration loaded successfully: stage=%s, logRetentionDays=%d, enableXRay=%v", stage, logRetentionDays, enableXRay)
 
 		// Common tags
 		commonTags := pulumi.StringMap{
@@ -35,8 +72,45 @@ func main() {
 		}
 
 		// ========================================
+		// S3 Bucket for Lambda Deployment Artifacts
+		// ========================================
+		log.Printf("Creating S3 bucket for Lambda deployment artifacts...")
+		lambdaDeploymentBucket, err := s3.NewBucket(ctx, fmt.Sprintf("rez-agent-lambda-deployments-%s", stage), &s3.BucketArgs{
+			Bucket: pulumi.String(fmt.Sprintf("rez-agent-lambda-deployments-%s", stage)),
+			Tags:   commonTags,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create Lambda deployment S3 bucket: %w", err)
+		}
+
+		// Block public access to the deployment bucket
+		_, err = s3.NewBucketPublicAccessBlock(ctx, fmt.Sprintf("rez-agent-lambda-deployments-pab-%s", stage), &s3.BucketPublicAccessBlockArgs{
+			Bucket:                lambdaDeploymentBucket.ID(),
+			BlockPublicAcls:       pulumi.Bool(true),
+			BlockPublicPolicy:     pulumi.Bool(true),
+			IgnorePublicAcls:      pulumi.Bool(true),
+			RestrictPublicBuckets: pulumi.Bool(true),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create bucket public access block: %w", err)
+		}
+
+		// Upload agent.zip to S3 (for large Lambda packages > 50MB)
+		log.Printf("Uploading agent.zip to S3...")
+		agentZipObject, err := s3.NewBucketObject(ctx, fmt.Sprintf("rez-agent-agent-code-%s", stage), &s3.BucketObjectArgs{
+			Bucket: lambdaDeploymentBucket.ID(),
+			Key:    pulumi.String(fmt.Sprintf("agent-%s.zip", stage)),
+			Source: pulumi.NewFileArchive("../build/agent.zip"),
+			Tags:   commonTags,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upload agent.zip to S3: %w", err)
+		}
+
+		// ========================================
 		// DynamoDB Table
 		// ========================================
+		log.Printf("Creating DynamoDB messages table...")
 		messagesTable, err := dynamodb.NewTable(ctx, fmt.Sprintf("rez-agent-messages-%s", stage), &dynamodb.TableArgs{
 			Name:        pulumi.String(fmt.Sprintf("rez-agent-messages-%s", stage)),
 			BillingMode: pulumi.String("PAY_PER_REQUEST"),
@@ -1097,13 +1171,15 @@ func main() {
 			return err
 		}
 
-		// Agent Lambda Function
+		// Agent Lambda Function (using S3 for large package)
+		log.Printf("Creating agent Lambda function from S3...")
 		agentLambda, err := lambda.NewFunction(ctx, fmt.Sprintf("rez-agent-agent-%s", stage), &lambda.FunctionArgs{
 			Name:    pulumi.String(fmt.Sprintf("rez-agent-agent-%s", stage)),
 			Runtime: pulumi.String("python3.12"),
 			Role:    agentRole.Arn,
 			Handler: pulumi.String("main.lambda_handler"),
-			Code:    pulumi.NewFileArchive("../build/agent.zip"),
+			S3Bucket: lambdaDeploymentBucket.ID(),
+			S3Key:    agentZipObject.Key,
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
 					"DYNAMODB_TABLE_NAME":      messagesTable.Name,
@@ -1121,7 +1197,7 @@ func main() {
 				Mode: pulumi.String(map[bool]string{true: "Active", false: "PassThrough"}[enableXRay]),
 			},
 			Tags: commonTags,
-		}, pulumi.DependsOn([]pulumi.Resource{agentLogGroup}))
+		}, pulumi.DependsOn([]pulumi.Resource{agentLogGroup, agentZipObject}))
 		if err != nil {
 			return err
 		}
@@ -1262,6 +1338,9 @@ func main() {
 		ctx.Export("agentResponseQueueArn", agentResponseQueue.Arn)
 		ctx.Export("agentSessionTableName", agentSessionTable.Name)
 		ctx.Export("agentSessionTableArn", agentSessionTable.Arn)
+
+		// S3 Deployment Bucket
+		ctx.Export("lambdaDeploymentBucket", lambdaDeploymentBucket.ID())
 
 		// API Gateway
 		ctx.Export("apiGatewayId", httpApi.ID())

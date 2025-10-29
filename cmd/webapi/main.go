@@ -46,7 +46,7 @@ func NewWebAPIHandler(
 
 // HandleRequest routes API Gateway V2 requests to appropriate handlers
 func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	h.logger.InfoContext(ctx, "received API request",
+	h.logger.DebugContext(ctx, "received API request",
 		slog.String("method", request.RequestContext.HTTP.Method),
 		slog.String("path", request.RawPath),
 	)
@@ -154,7 +154,7 @@ func (h *WebAPIHandler) handleListMessages(ctx context.Context, request events.A
 		}
 	}
 
-	h.logger.InfoContext(ctx, "listing messages",
+	h.logger.DebugContext(ctx, "listing messages",
 		slog.Any("stage", stage),
 		slog.Any("status", status),
 		slog.Int("limit", limit),
@@ -280,7 +280,7 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 	// Create message
 	message := models.NewMessage("webapi", stage, messageType, payloadStr)
 
-	h.logger.InfoContext(ctx, "creating message",
+	h.logger.DebugContext(ctx, "creating message",
 		slog.String("message_id", message.ID),
 		slog.String("type", message.MessageType.String()),
 	)
@@ -319,7 +319,7 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 
 // handleMetrics returns metrics about messages
 func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayV2HTTPResponse, error) {
-	h.logger.InfoContext(ctx, "retrieving metrics")
+	h.logger.DebugContext(ctx, "retrieving metrics")
 
 	// Get messages by status
 	allMessages, err := h.repository.ListMessages(ctx, nil, nil, 1000)
@@ -411,6 +411,7 @@ func main() {
 		snsClient,
 		cfg.WebActionsSNSTopicArn,
 		cfg.NotificationsSNSTopicArn,
+		cfg.AgentResponseTopicArn,
 		logger,
 	)
 	logger.Info("using topic-routing SNS client",

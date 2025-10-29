@@ -105,7 +105,7 @@ func (c *Client) Do(ctx context.Context, config RequestConfig) (*Response, error
 		if attempt > 0 {
 			// Exponential backoff: 2^attempt seconds
 			backoff := time.Duration(1<<uint(attempt)) * time.Second
-			c.logger.Info("retrying HTTP request",
+			c.logger.Debug("retrying HTTP request",
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", maxRetries),
 				slog.Duration("backoff", backoff),
@@ -205,7 +205,7 @@ func (c *Client) doRequest(ctx context.Context, config RequestConfig) (*Response
 	}
 
 	// Log response
-	c.logger.Info("HTTP request completed",
+	c.logger.Debug("HTTP request completed",
 		slog.String("method", config.Method),
 		slog.String("url", config.URL),
 		slog.Int("status_code", resp.StatusCode),
@@ -329,7 +329,7 @@ func (c *Client) ClearOAuthCache() {
 	defer c.oauthCacheLock.Unlock()
 
 	c.oauthCache = make(map[string]*cachedToken)
-	c.logger.Info("OAuth token cache cleared")
+	c.logger.Debug("OAuth token cache cleared")
 }
 
 // DoFormPost performs a form-encoded POST request (for OAuth token requests)
@@ -383,7 +383,7 @@ func (c *Client) DoFormPost(ctx context.Context, targetURL string, formData url.
 		Headers:    resp.Header,
 	}
 
-	c.logger.Info("form POST completed",
+	c.logger.Debug("form POST completed",
 		slog.String("url", targetURL),
 		slog.Int("status_code", resp.StatusCode),
 		slog.Duration("duration", duration),

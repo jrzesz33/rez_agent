@@ -41,7 +41,7 @@ func (h *GolfHandler) GetActionType() models.WebActionType {
 
 // Execute fetches golf reservations and formats notification
 func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
-	h.logger.Info("executing golf action",
+	h.logger.Debug("executing golf action",
 		slog.String("url", payload.URL),
 	)
 
@@ -79,7 +79,7 @@ func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayl
 			h.logger.Error("JWT verification failed", slog.String("error", err.Error()))
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
-		h.logger.Info("JWT verified successfully",
+		h.logger.Debug("JWT verified successfully",
 			slog.String("golfer_id", claims.GolferID),
 			slog.String("acct", claims.Acct))
 	}
@@ -105,7 +105,7 @@ func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayl
 
 // handleFetchReservations handles fetching upcoming reservations
 func (h *GolfHandler) handleFetchReservations(ctx context.Context, payload *models.WebActionPayload, accessToken string) ([]string, error) {
-	h.logger.Info("fetching golf reservations")
+	h.logger.Debug("fetching golf reservations")
 
 	// Fetch reservations
 	reservations, err := h.fetchReservations(ctx, payload.URL, accessToken)
@@ -116,7 +116,7 @@ func (h *GolfHandler) handleFetchReservations(ctx context.Context, payload *mode
 	// Format notification message
 	notification := h.formatReservationNotification(reservations)
 
-	h.logger.Info("golf action completed successfully",
+	h.logger.Debug("golf action completed successfully",
 		slog.Int("reservations_found", len(reservations)),
 	)
 
@@ -267,7 +267,7 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 
 // handleSearchTeeTimes searches for available tee times
 func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.WebActionPayload, accessToken string, claims *models.JWTClaims) ([]string, error) {
-	h.logger.Info("searching for tee times")
+	h.logger.Debug("searching for tee times")
 
 	// Parse search parameters from payload.Arguments
 	params, err := h.parseSearchTeeTimesParams(payload.Arguments)
@@ -275,7 +275,7 @@ func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.
 		return nil, fmt.Errorf("invalid search parameters: %w", err)
 	}
 
-	h.logger.Info("search parameters",
+	h.logger.Debug("search parameters",
 		slog.String("search_date", params.SearchDate),
 		slog.Int("num_players", params.NumberOfPlayer),
 		slog.Bool("auto_book", params.AutoBook))
@@ -286,7 +286,7 @@ func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.
 		return nil, fmt.Errorf("failed to search tee times: %w", err)
 	}
 
-	h.logger.Info("tee times found",
+	h.logger.Debug("tee times found",
 		slog.Int("count", len(teeTimeSlots)))
 
 	// If auto-book and tee times found, book the first one
@@ -343,7 +343,7 @@ func (h *GolfHandler) parseSearchTeeTimesParams(args map[string]interface{}) (*m
 	if autoBook, ok := args["autoBook"].(bool); ok {
 		params.AutoBook = autoBook
 	} else {
-		h.logger.Info("Auto Booking Not Requested")
+		h.logger.Debug("Auto Booking Not Requested")
 	}
 
 	// Validate number of players
@@ -482,7 +482,7 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		return nil, fmt.Errorf("invalid booking parameters: %w", err)
 	}
 
-	h.logger.Info("booking parameters",
+	h.logger.Debug("booking parameters",
 		slog.Int("tee_sheet_id", params.TeeSheetID),
 		slog.Int("num_players", params.NumberOfPlayer))
 
@@ -496,7 +496,7 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		return nil, fmt.Errorf("lock error: %s", lockResp.Error)
 	}
 
-	h.logger.Info("tee time locked",
+	h.logger.Debug("tee time locked",
 		slog.String("session_id", lockResp.SessionID))
 
 	// Step 2: Calculate pricing
@@ -506,7 +506,7 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		return nil, fmt.Errorf("pricing calculation failed: %w", err)
 	}
 
-	h.logger.Info("pricing calculated",
+	h.logger.Debug("pricing calculated",
 		slog.String("transaction_id", pricingResp.TransactionID),
 		slog.Float64("total", pricingResp.SummaryDetail.Total))
 
@@ -616,7 +616,7 @@ func (h *GolfHandler) lockTeeTime(ctx context.Context, params *models.BookTeeTim
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	h.logger.Info("lock tee time response", slog.String("body", resp.Body))
+	h.logger.Debug("lock tee time response", slog.String("body", resp.Body))
 	// Parse response
 	var lockResp models.LockTeeTimeResponse
 	if err := json.Unmarshal([]byte(resp.Body), &lockResp); err != nil {
@@ -672,14 +672,25 @@ func (h *GolfHandler) calculatePricing(ctx context.Context, params *models.BookT
 	}
 
 	headers := map[string]string{
-		"accept":          "application/json, text/plain, */*",
-		"accept-language": "en-US,en;q=0.9",
-		"authorization":   fmt.Sprintf("Bearer %s", accessToken),
-		"cache-control":   "no-cache, no-store, must-revalidate",
-		"client-id":       "onlineresweb",
-		"content-type":    "application/json",
-		"x-componentid":   "1",
-		"x-websiteid":     "94fa26b7-2e63-4cbc-99e5-08d7d7f41522",
+		"accept":            "application/json, text/plain, */*",
+		"accept-language":   "en-US,en;q=0.9",
+		"authorization":     fmt.Sprintf("Bearer %s", accessToken),
+		"cache-control":     "no-cache, no-store, must-revalidate",
+		"client-id":         "onlineresweb",
+		"content-type":      "application/json",
+		"x-componentid":     "1",
+		"x-websiteid":       "94fa26b7-2e63-4cbc-99e5-08d7d7f41522",
+		"x-ismobile":        "true",
+		"x-moduleid":        "7",
+		"x-productid":       "1",
+		"x-siteid":          "3",
+		"x-terminalid":      "7",
+		"x-timezone-offset": "240",
+		"x-timezoneid":      "America/New_York",
+		"if-modified-since": "0",
+		"origin":            "https://birdsfoot.cps.golf",
+		"pragma":            "no-cache",
+		"priority":          "u=1, i",
 	}
 
 	resp, err := h.httpClient.Do(ctx, httpclient.RequestConfig{
@@ -692,7 +703,7 @@ func (h *GolfHandler) calculatePricing(ctx context.Context, params *models.BookT
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	h.logger.Info("pricing calculation response", slog.String("body", resp.Body))
+	h.logger.Debug("pricing calculation response", slog.String("body", resp.Body))
 	// Parse response
 	var pricingResp models.PricingCalculationResponse
 	if err := json.Unmarshal([]byte(resp.Body), &pricingResp); err != nil {

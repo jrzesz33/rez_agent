@@ -53,7 +53,7 @@ func ParseSQSEvent(event events.SQSEvent, logger *slog.Logger) ([]*models.Messag
 			return nil, fmt.Errorf("failed to unmarshal message from SQS record %s: %w", record.MessageId, err)
 		}
 
-		logger.Info("parsed message from SQS",
+		logger.Debug("parsed message from SQS",
 			slog.String("message_id", message.ID),
 			slog.String("sqs_message_id", record.MessageId),
 			slog.String("stage", message.Stage.String()),
@@ -116,7 +116,7 @@ func (p *SQSBatchProcessor) ProcessBatch(ctx context.Context, event events.SQSEv
 				ItemIdentifier: record.MessageId,
 			})
 		} else {
-			p.logger.InfoContext(ctx, "successfully processed message",
+			p.logger.DebugContext(ctx, "successfully processed message",
 				slog.String("message_id", message.ID),
 				slog.String("sqs_message_id", record.MessageId),
 			)

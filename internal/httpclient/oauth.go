@@ -46,7 +46,7 @@ func (oc *OAuthClient) OAuthPasswordGrant(ctx context.Context, tokenURL, secretN
 		return cachedToken, nil
 	}
 
-	oc.logger.Info("fetching new OAuth token via password grant",
+	oc.logger.Debug("fetching new OAuth token via password grant",
 		slog.String("token_url", tokenURL),
 		slog.String("secret_name", "[REDACTED]"),
 	)
@@ -108,7 +108,7 @@ func (oc *OAuthClient) OAuthPasswordGrant(ctx context.Context, tokenURL, secretN
 	}
 	oc.httpClient.CacheOAuthToken(cacheKey, tokenResp.AccessToken, expiresIn)
 
-	oc.logger.Info("OAuth token acquired successfully",
+	oc.logger.Debug("OAuth token acquired successfully",
 		slog.String("token_type", tokenResp.TokenType),
 		slog.Int("expires_in", expiresIn),
 		// SECURITY: Never log the actual token

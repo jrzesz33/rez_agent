@@ -1,0 +1,207 @@
+{
+  "agent_id": "rez-agent-golf-assistant",
+  "name": "Golf Reservation Assistant",
+  "version": "1.0.0",
+  "description": "AI-powered golf reservation assistant that helps users manage tee times, check reservations, and get weather forecasts for golf courses.",
+  "capabilities": [
+    "golf_reservations_management",
+    "tee_time_search_and_booking",
+    "weather_forecasts",
+    "push_notifications"
+  ],
+  "supported_courses": [
+    {
+      "id": 1,
+      "name": "Birdsfoot Golf Course",
+      "location": "Freeport, PA"
+    },
+    {
+      "id": 2,
+      "name": "Totteridge",
+      "location": "Greensburg, PA"
+    }
+  ],
+  "endpoints": {
+    "primary": "/agent",
+    "health": "/health"
+  },
+  "protocol": {
+    "type": "http",
+    "method": "POST",
+    "content_type": "application/json",
+    "request_schema": {
+      "type": "object",
+      "required": ["message", "session_id"],
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "User message or agent-to-agent request"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Unique session identifier for conversation continuity"
+        },
+        "agent_context": {
+          "type": "object",
+          "description": "Optional context from calling agent",
+          "properties": {
+            "agent_id": {"type": "string"},
+            "request_id": {"type": "string"},
+            "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]}
+          }
+        }
+      }
+    },
+    "response_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {"type": "string"},
+        "message": {"type": "string"},
+        "status": {"type": "string", "enum": ["success", "error", "pending"]},
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "tools_used": {"type": "array", "items": {"type": "string"}},
+            "execution_time_ms": {"type": "number"}
+          }
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "get_reservations",
+      "description": "Retrieve upcoming golf reservations for a user at a specific course",
+      "parameters": {
+        "course_name": {
+          "type": "string",
+          "required": true,
+          "description": "Name of the golf course (Birdsfoot Golf Course or Totteridge)"
+        }
+      },
+      "async": true
+    },
+    {
+      "name": "search_tee_times",
+      "description": "Search for available tee times at a golf course",
+      "parameters": {
+        "course_name": {
+          "type": "string",
+          "required": true,
+          "description": "Name of the golf course"
+        },
+        "date": {
+          "type": "string",
+          "required": true,
+          "format": "YYYY-MM-DD",
+          "description": "Date to search for tee times"
+        },
+        "start_time": {
+          "type": "string",
+          "required": true,
+          "format": "HH:MM",
+          "description": "Start time for search window (24-hour format)"
+        },
+        "end_time": {
+          "type": "string",
+          "required": false,
+          "format": "HH:MM",
+          "description": "End time for search window (24-hour format)"
+        },
+        "number_of_players": {
+          "type": "integer",
+          "required": false,
+          "default": 1,
+          "minimum": 1,
+          "maximum": 4,
+          "description": "Number of players"
+        },
+        "auto_book": {
+          "type": "boolean",
+          "required": false,
+          "default": false,
+          "description": "Automatically book the earliest available time"
+        }
+      },
+      "async": true
+    },
+    {
+      "name": "book_tee_time",
+      "description": "Book a specific tee time at a golf course",
+      "parameters": {
+        "course_name": {
+          "type": "string",
+          "required": true,
+          "description": "Name of the golf course"
+        },
+        "tee_sheet_id": {
+          "type": "integer",
+          "required": true,
+          "description": "Tee sheet ID from search results"
+        }
+      },
+      "async": true
+    },
+    {
+      "name": "get_weather",
+      "description": "Get weather forecast for a golf course location",
+      "parameters": {
+        "course_name": {
+          "type": "string",
+          "required": true,
+          "description": "Name of the golf course"
+        },
+        "days": {
+          "type": "integer",
+          "required": false,
+          "default": 2,
+          "minimum": 1,
+          "maximum": 7,
+          "description": "Number of days to forecast"
+        }
+      },
+      "async": true
+    },
+    {
+      "name": "send_notification",
+      "description": "Send a push notification to the user",
+      "parameters": {
+        "message": {
+          "type": "string",
+          "required": true,
+          "description": "Notification message content"
+        }
+      },
+      "async": false
+    }
+  ],
+  "authentication": {
+    "type": "api_key",
+    "header": "X-API-Key",
+    "description": "API key for agent-to-agent authentication"
+  },
+  "rate_limits": {
+    "requests_per_minute": 60,
+    "requests_per_hour": 1000,
+    "requests_per_day": 10000
+  },
+  "sla": {
+    "availability": "99.9%",
+    "response_time_p95_ms": 5000,
+    "response_time_p99_ms": 10000
+  },
+  "contact": {
+    "maintainer": "rez-agent-team",
+    "email": "support@example.com",
+    "documentation": "https://docs.example.com/agents/golf-assistant"
+  },
+  "tags": [
+    "golf",
+    "reservations",
+    "booking",
+    "weather",
+    "sports"
+  ],
+  "created_at": "2025-01-29T00:00:00Z",
+  "updated_at": "2025-01-29T00:00:00Z"
+}

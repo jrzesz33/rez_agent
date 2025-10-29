@@ -22,6 +22,7 @@ type Config struct {
 	// SNS Configuration
 	WebActionsSNSTopicArn    string // Topic for web action messages
 	NotificationsSNSTopicArn string // Topic for notification messages
+	AgentResponseTopicArn    string // Topic for agent response messages
 
 	// SQS Configuration
 	NotificationSQSQueueURL string
@@ -67,6 +68,7 @@ func Load() (*Config, error) {
 	// Topic-based routing (for webapi Lambda)
 	webActionsSNSTopicArn := os.Getenv("WEB_ACTIONS_TOPIC_ARN")
 	notificationsSNSTopicArn := os.Getenv("NOTIFICATIONS_TOPIC_ARN")
+	agentResponseTopicArn := os.Getenv("AGENT_RESPONSE_TOPIC_ARN")
 
 	notificationSqsQueueURL := os.Getenv("NOTIFICATION_SQS_QUEUE_URL")
 	if notificationSqsQueueURL == "" {
@@ -93,6 +95,7 @@ func Load() (*Config, error) {
 		WebActionResultsTableName: webActionResultsTableName,
 		WebActionsSNSTopicArn:     webActionsSNSTopicArn,
 		NotificationsSNSTopicArn:  notificationsSNSTopicArn,
+		AgentResponseTopicArn:     agentResponseTopicArn,
 		WebActionSQSQueueURL:      webActionSQSQueueURL,
 		NtfyURL:                   ntfyURL,
 		GolfSecretName:            golfSecretName,

@@ -33,7 +33,7 @@ func (h *WeatherHandler) GetActionType() models.WebActionType {
 
 // Execute fetches weather forecast and formats notification
 func (h *WeatherHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
-	h.logger.Info("executing weather action",
+	h.logger.Debug("executing weather action",
 		slog.String("url", payload.URL),
 	)
 
@@ -68,7 +68,7 @@ func (h *WeatherHandler) Execute(ctx context.Context, payload *models.WebActionP
 	// Format notification message
 	notification := h.formatWeatherNotification(weatherData, numDays)
 
-	h.logger.Info("weather action completed successfully",
+	h.logger.Debug("weather action completed successfully",
 		slog.Int("num_days", numDays),
 		slog.Int("periods_found", len(weatherData.Properties.Periods)),
 	)

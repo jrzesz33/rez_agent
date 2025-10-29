@@ -153,7 +153,7 @@ func (m *Manager) ClearCache() {
 	defer m.cacheLock.Unlock()
 
 	m.cache = make(map[string]*cachedSecret)
-	m.logger.Info("secret cache cleared")
+	m.logger.Debug("secret cache cleared")
 }
 
 // GetCacheSize returns the number of cached secrets

@@ -53,7 +53,7 @@ func (h *SchedulerHandler) HandleEvent(ctx context.Context, event interface{}) e
 		"Hello World! This is a scheduled message from rez_agent.",
 	)
 
-	h.logger.InfoContext(ctx, "created message",
+	h.logger.DebugContext(ctx, "created message",
 		slog.String("message_id", message.ID),
 		slog.String("type", message.MessageType.String()),
 	)
@@ -68,7 +68,7 @@ func (h *SchedulerHandler) HandleEvent(ctx context.Context, event interface{}) e
 		return fmt.Errorf("failed to save message: %w", err)
 	}
 
-	h.logger.InfoContext(ctx, "saved message to DynamoDB",
+	h.logger.DebugContext(ctx, "saved message to DynamoDB",
 		slog.String("message_id", message.ID),
 	)
 
@@ -133,7 +133,7 @@ func main() {
 
 	// Create repository and publisher
 	repo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
-	publisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, logger)
+	publisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, cfg.AgentResponseTopicArn, logger)
 
 	// Create handler
 	handler := NewSchedulerHandler(cfg, repo, publisher, logger)

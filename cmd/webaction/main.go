@@ -24,12 +24,13 @@ import (
 )
 
 type Handler struct {
-	messageRepo     repository.MessageRepository
-	resultRepo      repository.WebActionResultRepository
-	snsPublisher    messaging.SNSPublisher
-	handlerRegistry *webaction.HandlerRegistry
-	sqsProcessor    *messaging.SQSBatchProcessor
-	logger          *slog.Logger
+	messageRepo           repository.MessageRepository
+	resultRepo            repository.WebActionResultRepository
+	snsPublisher          messaging.SNSPublisher
+	handlerRegistry       *webaction.HandlerRegistry
+	sqsProcessor          *messaging.SQSBatchProcessor
+	agentResponseTopicArn string
+	logger                *slog.Logger
 }
 
 func main() {
@@ -70,7 +71,7 @@ func main() {
 	logger.Info("Initialized Repositories")
 
 	// Initialize SNS publisher
-	snsPublisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, logger)
+	snsPublisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, cfg.AgentResponseTopicArn, logger)
 
 	// Initialize SQS processor
 	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
@@ -106,12 +107,13 @@ func main() {
 
 	// Create handler
 	handler := &Handler{
-		messageRepo:     messageRepo,
-		resultRepo:      resultRepo,
-		snsPublisher:    snsPublisher,
-		handlerRegistry: handlerRegistry,
-		sqsProcessor:    sqsProcessor,
-		logger:          logger,
+		messageRepo:           messageRepo,
+		resultRepo:            resultRepo,
+		snsPublisher:          snsPublisher,
+		handlerRegistry:       handlerRegistry,
+		sqsProcessor:          sqsProcessor,
+		agentResponseTopicArn: cfg.AgentResponseTopicArn,
+		logger:                logger,
 	}
 
 	// Start Lambda
@@ -132,7 +134,7 @@ func (h *Handler) HandleSQSEvent(ctx context.Context, event events.SQSEvent) (ev
 func (h *Handler) processMessage(ctx context.Context, message *models.Message) error {
 	startTime := time.Now()
 
-	h.logger.Info("processing web action message",
+	h.logger.Debug("processing web action message",
 		slog.String("message_id", message.ID),
 	)
 
@@ -156,7 +158,7 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 
 	// SECURITY: Log redacted payload
 	redactedPayload := payload.RedactSensitiveData()
-	h.logger.Info("parsed web action payload",
+	h.logger.Debug("parsed web action payload",
 		slog.String("action", redactedPayload.Action.String()),
 		slog.String("url", redactedPayload.URL),
 	)
@@ -206,7 +208,7 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 		}
 	}
 
-	h.logger.Info("web action completed successfully",
+	h.logger.Debug("web action completed successfully",
 		slog.String("message_id", message.ID),
 		slog.String("action", payload.Action.String()),
 		slog.Duration("execution_time", executionTime),
@@ -228,26 +230,47 @@ func (h *Handler) executeWebAction(ctx context.Context, payload *models.WebActio
 }
 
 // publishNotification publishes a notification message to SNS
+// If the original message was created by the AI agent, route response to agent topic
 func (h *Handler) publishNotification(ctx context.Context, originalMessage *models.Message, notificationContent string) error {
+	// Check if message was created by AI agent
+	isAgentMessage := originalMessage.CreatedBy == "ai-agent"
+
 	// Create notification message
-	notificationMsg := models.NewMessage(
-		"web-action-processor",
-		originalMessage.Stage,
-		models.MessageTypeNotification,
-		notificationContent,
-	)
+	var notificationMsg *models.Message
+	if isAgentMessage {
+		// For agent-created messages, send response back to agent topic
+		notificationMsg = models.NewMessage(
+			"web-action-processor",
+			originalMessage.Stage,
+			models.MessageTypeAgentResponse,
+			notificationContent,
+		)
+
+		h.logger.Debug("routing response to agent",
+			slog.String("original_message_id", originalMessage.ID),
+			slog.String("created_by", originalMessage.CreatedBy),
+		)
+	} else {
+		// For non-agent messages, use normal notification routing
+		notificationMsg = models.NewMessage(
+			"web-action-processor",
+			originalMessage.Stage,
+			models.MessageTypeNotification,
+			notificationContent,
+		)
+	}
 
 	// Save notification message
 	if err := h.messageRepo.SaveMessage(ctx, notificationMsg); err != nil {
 		return fmt.Errorf("failed to save notification message: %w", err)
 	}
 
-	// Publish to SNS
+	// Publish to normal notification topic
 	if err := h.snsPublisher.PublishMessage(ctx, notificationMsg); err != nil {
 		return fmt.Errorf("failed to publish notification to SNS: %w", err)
 	}
 
-	h.logger.Info("notification published",
+	h.logger.Debug("response published",
 		slog.String("notification_message_id", notificationMsg.ID),
 		slog.String("original_message_id", originalMessage.ID),
 	)

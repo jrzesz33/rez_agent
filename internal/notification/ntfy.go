@@ -61,7 +61,7 @@ func (c *NtfyClient) Send(ctx context.Context, message string) error {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s, etc.
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			c.logger.InfoContext(ctx, "retrying notification send",
+			c.logger.DebugContext(ctx, "retrying notification send",
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", c.maxRetries),
 				slog.Duration("backoff", backoff),
@@ -76,7 +76,7 @@ func (c *NtfyClient) Send(ctx context.Context, message string) error {
 
 		err := c.sendOnce(ctx, message)
 		if err == nil {
-			c.logger.InfoContext(ctx, "notification sent successfully",
+			c.logger.DebugContext(ctx, "notification sent successfully",
 				slog.Int("attempt", attempt+1),
 			)
 			return nil
@@ -124,7 +124,7 @@ func (c *NtfyClient) SendWithTitle(ctx context.Context, title, message string) e
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			c.logger.InfoContext(ctx, "retrying notification send with title",
+			c.logger.DebugContext(ctx, "retrying notification send with title",
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", c.maxRetries),
 				slog.Duration("backoff", backoff),
@@ -139,7 +139,7 @@ func (c *NtfyClient) SendWithTitle(ctx context.Context, title, message string) e
 
 		err := c.sendOnceWithTitle(ctx, title, message)
 		if err == nil {
-			c.logger.InfoContext(ctx, "notification with title sent successfully",
+			c.logger.DebugContext(ctx, "notification with title sent successfully",
 				slog.Int("attempt", attempt+1),
 			)
 			return nil

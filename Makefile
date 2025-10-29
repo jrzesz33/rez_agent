@@ -16,7 +16,7 @@ help: ## Show this help message
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
 
-build: clean build-scheduler build-processor build-webaction build-webapi ## Build all Lambda functions
+build: clean build-scheduler build-processor build-webaction build-webapi build-agent ## Build all Lambda functions
 	@echo "$(GREEN)All Lambda functions built successfully$(NC)"
 
 build-scheduler: ## Build scheduler Lambda function
@@ -46,6 +46,16 @@ build-webapi: ## Build webapi Lambda function
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o $(BUILD_DIR)/bootstrap ./cmd/webapi
 	@cd $(BUILD_DIR) && zip webapi.zip bootstrap && rm bootstrap
 	@echo "$(GREEN)WebAPI Lambda built: $(BUILD_DIR)/webapi.zip$(NC)"
+
+build-agent: ## Build AI agent Lambda function (Python)
+	@echo "$(YELLOW)Building AI agent Lambda...$(NC)"
+	@mkdir -p $(BUILD_DIR)/agent
+	@cp cmd/agent/*.py $(BUILD_DIR)/agent/
+	@cp -r pkg $(BUILD_DIR)/agent/
+	@pip install -q -r cmd/agent/requirements.txt -t $(BUILD_DIR)/agent/ --platform manylinux2014_x86_64 --only-binary=:all:
+	@cd $(BUILD_DIR)/agent && zip -qr ../agent.zip .
+	@rm -rf $(BUILD_DIR)/agent
+	@echo "$(GREEN)AI Agent Lambda built: $(BUILD_DIR)/agent.zip$(NC)"
 
 clean: ## Clean build artifacts
 	@echo "$(YELLOW)Cleaning build directory...$(NC)"

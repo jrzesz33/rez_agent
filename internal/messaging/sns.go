@@ -43,11 +43,12 @@ type TopicRoutingSNSClient struct {
 	client                *sns.Client
 	webActionsTopicArn    string
 	notificationsTopicArn string
+	agentResponseTopicArn string
 	logger                *slog.Logger
 }
 
 // NewTopicRoutingSNSClient creates a new topic-routing SNS client
-func NewTopicRoutingSNSClient(client *sns.Client, webActionsTopicArn, notificationsTopicArn string, logger *slog.Logger) *TopicRoutingSNSClient {
+func NewTopicRoutingSNSClient(client *sns.Client, webActionsTopicArn, notificationsTopicArn, agentResponseTopicArn string, logger *slog.Logger) *TopicRoutingSNSClient {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -56,6 +57,7 @@ func NewTopicRoutingSNSClient(client *sns.Client, webActionsTopicArn, notificati
 		client:                client,
 		webActionsTopicArn:    webActionsTopicArn,
 		notificationsTopicArn: notificationsTopicArn,
+		agentResponseTopicArn: agentResponseTopicArn,
 		logger:                logger,
 	}
 }
@@ -65,6 +67,8 @@ func (s *TopicRoutingSNSClient) getTopicForMessageType(messageType models.Messag
 	switch messageType {
 	case models.MessageTypeWebAction:
 		return s.webActionsTopicArn
+	case models.MessageTypeAgentResponse:
+		return s.agentResponseTopicArn
 	default:
 		// All other message types (scheduled, manual, hello_world) go to notifications topic
 		return s.notificationsTopicArn
@@ -107,7 +111,7 @@ func (s *TopicRoutingSNSClient) PublishMessage(ctx context.Context, message *mod
 		return fmt.Errorf("failed to publish message to SNS topic %s: %w", topicArn, err)
 	}
 
-	s.logger.InfoContext(ctx, "message published to topic-routed SNS",
+	s.logger.DebugContext(ctx, "message published to topic-routed SNS",
 		slog.String("message_id", message.ID),
 		slog.String("message_type", message.MessageType.String()),
 		slog.String("sns_message_id", aws.ToString(result.MessageId)),

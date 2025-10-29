@@ -1,0 +1,69 @@
+courses:
+  - courseId: 1
+    name: "Birdsfoot Golf Course"
+    address: "225 Furnace Run Rd, Freeport, PA 16229"
+    description: "The course features 18 distinct holes -- including four of the area's toughest par 3s -- that attract golfers from all over the tri-state area and challenge every club in the bag."
+    origin: "https://birdsfoot.cps.golf"
+    client-id: "onlineresweb"
+    websiteid: "94fa26b7-2e63-4cbc-99e5-08d7d7f41522"
+    actions:
+      - request:
+        name: search-tee-times: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/TeeTimes"
+      - request:
+        name: get-reservations: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation"
+      - request:
+        name: book-tee-time: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/ReserveTeeTimes"
+        cancelReservationLink: "/onlineresweb/auth/verify-email?returnUrl=cancel-booking"
+        homePageLink: "/onlineresweb"
+      - request:
+        name: token-url: 
+        url: "/identityapi/connect/token"
+      - request:
+        name: jwks-url: 
+        url: "/identityapi/.well-known/openid-configuration/jwks"
+      - request:
+        name: get-weather: 
+        url: "https://api.weather.gov/gridpoints/TOP/31,80/forecast"
+      - request:
+        name: price-calculation: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/TeeTimePricesCalculation"
+      - request:
+        name: lock-tee-time: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/LockTeeTimes"
+- courseId: 2
+    name: "Totteridge"
+    address: "2029 Totteridge Dr Greensburg, PA 15601"
+    description: " In Totteridge, Rees Jones planned both a great golf course and complimentary residential community. Just east of Pittsburgh, the rolling hills that surround the course will seemingly transport anyone to the rural English landscape of Totteridge."
+    origin: "https://totteridge.cps.golf"
+    client-id: "onlineresweb"
+    websiteid: "17691e46-9c9b-4e67-982f-08d7d8050db9"
+    actions:
+      - request:
+        name: search-tee-times: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/TeeTimes"
+      - request:
+        name: get-reservations: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation"
+      - request:
+        name: book-tee-time: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/ReserveTeeTimes"
+        cancelReservationLink: "/onlineresweb/auth/verify-email?returnUrl=cancel-booking"
+        homePageLink: "/onlineresweb"
+      - request:
+        name: token-url: 
+        url: "/identityapi/connect/token"
+      - request:
+        name: jwks-url: 
+        url: "/identityapi/.well-known/openid-configuration/jwks"
+      - request:
+        name: get-weather: 
+        url: "https://api.weather.gov/gridpoints/PBZ/95,64/forecast"
+      - request:
+        name: price-calculation: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/TeeTimePricesCalculation"
+      - request:
+        name: lock-tee-time: 
+        url: "/onlineres/onlineapi/api/v1/onlinereservation/LockTeeTimes"

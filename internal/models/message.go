@@ -70,6 +70,8 @@ const (
 	MessageTypeHelloWorld MessageType = "hello_world"
 	// MessageTypeManual is a manually created message
 	MessageTypeNotification MessageType = "notify"
+	// MessageTypeManual is a manually created message
+	MessageTypeAgentResponse MessageType = "agent_response"
 	// MessageTypeScheduled is a scheduled message
 	MessageTypeScheduled MessageType = "scheduled"
 	// MessageTypeWebAction is a web action request (HTTP REST API call)
@@ -79,7 +81,7 @@ const (
 // IsValid checks if the message type value is valid
 func (mt MessageType) IsValid() bool {
 	switch mt {
-	case MessageTypeHelloWorld, MessageTypeNotification, MessageTypeScheduled, MessageTypeWebAction:
+	case MessageTypeHelloWorld, MessageTypeNotification, MessageTypeScheduled, MessageTypeWebAction, MessageTypeAgentResponse:
 		return true
 	default:
 		return false

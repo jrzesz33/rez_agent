@@ -69,7 +69,7 @@ func (h *ProcessorHandler) HandleEvent(ctx context.Context, event events.SQSEven
 
 // processMessage processes a single message
 func (h *ProcessorHandler) processMessage(ctx context.Context, message *models.Message) error {
-	h.logger.InfoContext(ctx, "processing message",
+	h.logger.DebugContext(ctx, "processing message",
 		slog.String("message_id", message.ID),
 		slog.String("type", message.MessageType.String()),
 		slog.String("current_status", message.Status.String()),
@@ -110,7 +110,7 @@ func (h *ProcessorHandler) processMessage(ctx context.Context, message *models.M
 		return fmt.Errorf("failed to send notification: %w", err)
 	}
 
-	h.logger.InfoContext(ctx, "notification sent successfully",
+	h.logger.DebugContext(ctx, "notification sent successfully",
 		slog.String("message_id", message.ID),
 	)
 
@@ -125,7 +125,7 @@ func (h *ProcessorHandler) processMessage(ctx context.Context, message *models.M
 		// Don't return error as the main processing succeeded
 	}
 
-	h.logger.InfoContext(ctx, "message processed successfully",
+	h.logger.DebugContext(ctx, "message processed successfully",
 		slog.String("message_id", message.ID),
 		slog.String("status", message.Status.String()),
 	)

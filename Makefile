@@ -51,8 +51,22 @@ build-agent: ## Build AI agent Lambda function (Python)
 	@echo "$(YELLOW)Building AI agent Lambda...$(NC)"
 	@mkdir -p $(BUILD_DIR)/agent
 	@cp cmd/agent/*.py $(BUILD_DIR)/agent/
-	@cp -r pkg $(BUILD_DIR)/agent/
-	@pip install -q -r cmd/agent/requirements.txt -t $(BUILD_DIR)/agent/ --platform manylinux2014_x86_64 --only-binary=:all:
+	@cp cmd/agent/*.json $(BUILD_DIR)/agent/
+	@cp -r cmd/agent/ui $(BUILD_DIR)/agent/
+	@if [ -d pkg ]; then cp -r pkg $(BUILD_DIR)/agent/; fi
+	@echo "$(YELLOW)Installing Python dependencies using Docker with Lambda runtime...$(NC)"
+	@docker run --rm \
+		--entrypoint pip \
+		-v $(PWD)/cmd/agent/requirements.txt:/tmp/requirements.txt \
+		-v $(PWD)/$(BUILD_DIR)/agent:/tmp/layer \
+		public.ecr.aws/lambda/python:3.12 \
+		install -r /tmp/requirements.txt -t /tmp/layer --no-cache-dir
+	@echo "$(YELLOW)Optimizing package size...$(NC)"
+	@find $(BUILD_DIR)/agent -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	@find $(BUILD_DIR)/agent -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+	@find $(BUILD_DIR)/agent -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
+	@find $(BUILD_DIR)/agent -type f -name "*.pyc" -delete 2>/dev/null || true
+	@find $(BUILD_DIR)/agent -type f -name "*.pyo" -delete 2>/dev/null || true
 	@cd $(BUILD_DIR)/agent && zip -qr ../agent.zip .
 	@rm -rf $(BUILD_DIR)/agent
 	@echo "$(GREEN)AI Agent Lambda built: $(BUILD_DIR)/agent.zip$(NC)"

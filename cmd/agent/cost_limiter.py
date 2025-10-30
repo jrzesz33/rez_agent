@@ -149,8 +149,8 @@ class CostLimiter:
         # Update cost record (optimistically - actual cost will be updated after LLM call)
         record["total_cost"] = str(projected_cost)
         record["request_count"] = record["request_count"] + 1
-        record["input_tokens"] = record.get("input_tokens", 0) + estimated_input_tokens
-        record["output_tokens"] = record.get("output_tokens", 0) + estimated_output_tokens
+        record["input_tokens"] = record.get("input_tokens", 0) + int(estimated_input_tokens)
+        record["output_tokens"] = record.get("output_tokens", 0) + int(estimated_output_tokens)
         self._save_cost_record(record)
 
         message = f"Request allowed. Projected cost: ${projected_cost:.2f} / ${DAILY_SPENDING_CAP}"
@@ -167,13 +167,13 @@ class CostLimiter:
         # Recalculate total cost based on actual tokens
         actual_cost = self.calculate_cost(input_tokens, output_tokens)
 
-        # Update record
-        record["input_tokens"] = record.get("input_tokens", 0) + input_tokens
-        record["output_tokens"] = record.get("output_tokens", 0) + output_tokens
+        # Update record - ensure integers for DynamoDB
+        record["input_tokens"] = record.get("input_tokens", 0) + int(input_tokens)
+        record["output_tokens"] = record.get("output_tokens", 0) + int(output_tokens)
 
         # Recalculate total from scratch to avoid accumulation errors
-        total_input_tokens = record["input_tokens"]
-        total_output_tokens = record["output_tokens"]
+        total_input_tokens = int(record["input_tokens"])
+        total_output_tokens = int(record["output_tokens"])
         record["total_cost"] = str(self.calculate_cost(total_input_tokens, total_output_tokens))
 
         self._save_cost_record(record)

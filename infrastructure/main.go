@@ -1275,6 +1275,18 @@ func main() {
 			return err
 		}
 
+		// API Gateway Route for Agent UI Interface
+		_, err = apigatewayv2.NewRoute(ctx, fmt.Sprintf("rez-agent-agent-ui-route-%s", stage), &apigatewayv2.RouteArgs{
+			ApiId:    httpApi.ID(),
+			RouteKey: pulumi.String("GET /agent/ui"),
+			Target: agentApiIntegration.ID().ApplyT(func(id string) string {
+				return fmt.Sprintf("integrations/%s", id)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
 		// ========================================
 		// CloudWatch Alarms
 		// ========================================

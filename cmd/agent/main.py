@@ -248,6 +248,26 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     "body": json.dumps({"error": "Failed to load agent card"})
                 }
 
+        # Serve UI interface
+        if request_path == "/agent/ui":
+            try:
+                with open("ui/index.html", "r") as f:
+                    ui_html = f.read()
+                return {
+                    "statusCode": 200,
+                    "headers": {
+                        "Content-Type": "text/html",
+                        "Access-Control-Allow-Origin": "*",
+                    },
+                    "body": ui_html
+                }
+            except Exception as e:
+                logger.error(f"Error loading UI: {e}")
+                return {
+                    "statusCode": 500,
+                    "body": json.dumps({"error": "Failed to load UI"})
+                }
+
         # Parse request
         body = json.loads(event.get("body", "{}"))
         user_message = body.get("message", "")

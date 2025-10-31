@@ -140,7 +140,7 @@ func validateFormat(fieldName, value, format string) error {
 		}
 	case "email":
 		// Basic email validation
-		if len(value) < 3 || !contains(value, '@') {
+		if len(value) < 3 || !contains(value, "@") {
 			return fmt.Errorf("field %s: invalid email format", fieldName)
 		}
 	case "uri", "url":

@@ -16,7 +16,7 @@ help: ## Show this help message
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-20s$(NC) %s\n", $$1, $$2}'
 
-build: clean build-scheduler build-processor build-webaction build-webapi build-agent ## Build all Lambda functions
+build: clean build-scheduler build-processor build-webaction build-webapi build-agent build-mcp ## Build all Lambda functions
 	@echo "$(GREEN)All Lambda functions built successfully$(NC)"
 
 build-scheduler: ## Build scheduler Lambda function
@@ -71,6 +71,19 @@ build-agent: ## Build AI agent Lambda function (Python)
 	@cd $(BUILD_DIR)/agent && zip -qr ../agent.zip .
 	@rm -rf $(BUILD_DIR)/agent
 	@echo "$(GREEN)AI Agent Lambda built: $(BUILD_DIR)/agent.zip$(NC)"
+
+build-mcp: ## Build MCP Lambda function
+	@echo "$(YELLOW)Building MCP Lambda...$(NC)"
+	@mkdir -p $(BUILD_DIR)
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o $(BUILD_DIR)/bootstrap ./cmd/mcp
+	@cd $(BUILD_DIR) && zip mcp.zip bootstrap && rm bootstrap
+	@echo "$(GREEN)MCP Lambda built: $(BUILD_DIR)/mcp.zip$(NC)"
+
+build-mcp-client: ## Build MCP stdio client binary
+	@echo "$(YELLOW)Building MCP stdio client...$(NC)"
+	@mkdir -p $(BUILD_DIR)
+	@go build -o $(BUILD_DIR)/rez-agent-mcp-client ./tools/mcp-client
+	@echo "$(GREEN)MCP client built: $(BUILD_DIR)/rez-agent-mcp-client$(NC)"
 
 clean: ## Clean build artifacts (preserves pip cache)
 	@echo "$(YELLOW)Cleaning build directory...$(NC)"

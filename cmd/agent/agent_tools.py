@@ -167,7 +167,7 @@ def get_reservations_tool(course_name: str) -> str:
             "auth_config": {
                 "type": "oauth_password",
                 "token_url": token_url,
-                "secret_name": f"rez-agent/golf/credentials-{STAGE}",
+                "secret_name": f"rez-agent/golf/credentials-prod",
                 "jwks_url": jwks_url
             },
             "stage": STAGE,
@@ -249,7 +249,7 @@ def search_tee_times_tool(
             "auth_config": {
                 "type": "oauth_password",
                 "token_url": token_url,
-                "secret_name": f"rez-agent/golf/credentials-{STAGE}",
+                "secret_name": f"rez-agent/golf/credentials-prod",
                 "jwks_url": jwks_url
             },
             "stage": STAGE,
@@ -310,7 +310,7 @@ def book_tee_time_tool(course_name: str, tee_sheet_id: int) -> str:
             "auth_config": {
                 "type": "oauth_password",
                 "token_url": token_url,
-                "secret_name": f"rez-agent/golf/credentials-{STAGE}",
+                "secret_name": f"rez-agent/golf/credentials-prod",
                 "jwks_url": jwks_url
             },
             "stage": STAGE,

@@ -5,6 +5,9 @@
 *.so
 *.dylib
 
+#Python Agent
+cmd/agent/.venv/*
+cmd/agent/__pycache__/*
 # Test binary, built with `go test -c`
 *.test
 
@@ -56,3 +59,5 @@ webaction
 webapi
 infrastructure/infrastructure
 infrastructure/core
+cmd/agent/.venv/bin/f2py
+cmd/agent/__pycache__/agent_tools.cpython-311.pyc

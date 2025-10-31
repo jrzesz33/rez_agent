@@ -54,13 +54,14 @@ build-agent: ## Build AI agent Lambda function (Python)
 	@cp cmd/agent/*.json $(BUILD_DIR)/agent/
 	@cp -r cmd/agent/ui $(BUILD_DIR)/agent/
 	@if [ -d pkg ]; then cp -r pkg $(BUILD_DIR)/agent/; fi
-	@echo "$(YELLOW)Installing Python dependencies using Docker with Lambda runtime...$(NC)"
+	@echo "$(YELLOW)Installing Python dependencies using Docker with Lambda runtime (with cache)...$(NC)"
 	@docker run --rm \
 		--entrypoint pip \
 		-v $(PWD)/cmd/agent/requirements.txt:/tmp/requirements.txt \
 		-v $(PWD)/$(BUILD_DIR)/agent:/tmp/layer \
+		-v rez-agent-pip-cache:/root/.cache/pip \
 		public.ecr.aws/lambda/python:3.12 \
-		install -r /tmp/requirements.txt -t /tmp/layer --no-cache-dir
+		install -r /tmp/requirements.txt -t /tmp/layer
 	@echo "$(YELLOW)Optimizing package size...$(NC)"
 	@find $(BUILD_DIR)/agent -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find $(BUILD_DIR)/agent -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
@@ -71,10 +72,16 @@ build-agent: ## Build AI agent Lambda function (Python)
 	@rm -rf $(BUILD_DIR)/agent
 	@echo "$(GREEN)AI Agent Lambda built: $(BUILD_DIR)/agent.zip$(NC)"
 
-clean: ## Clean build artifacts
+clean: ## Clean build artifacts (preserves pip cache)
 	@echo "$(YELLOW)Cleaning build directory...$(NC)"
 	@rm -rf $(BUILD_DIR)
-	@echo "$(GREEN)Build directory cleaned$(NC)"
+	@echo "$(GREEN)Build directory cleaned (Docker pip cache preserved)$(NC)"
+
+clean-all: ## Clean build artifacts including pip cache
+	@echo "$(YELLOW)Cleaning build directory and Docker pip cache...$(NC)"
+	@rm -rf $(BUILD_DIR)
+	@docker volume rm rez-agent-pip-cache 2>/dev/null || true
+	@echo "$(GREEN)Build directory and cache cleaned$(NC)"
 
 test: ## Run all tests
 	@echo "$(YELLOW)Running tests...$(NC)"

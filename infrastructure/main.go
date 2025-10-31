@@ -797,13 +797,14 @@ func main() {
 		// WebAction Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-webaction-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: webactionRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, webActionResultsTable.Arn, webActionsQueue.Arn, webActionsTopic.Arn, notificationsQueue.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
+			Policy: pulumi.All(messagesTable.Arn, webActionResultsTable.Arn, webActionsQueue.Arn, webActionsTopic.Arn, notificationsQueue.Arn, notificationsTopic.Arn, agentResponseTopic.Arn).ApplyT(func(args []interface{}) string {
 				tableArn := args[0].(string)
 				webActionResultsArn := args[1].(string)
 				waQueueArn := args[2].(string)
 				waTtopicArn := args[3].(string)
 				noQueueArn := args[4].(string)
 				noTtopicArn := args[5].(string)
+				agentResponseTopicArn := args[6].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -843,7 +844,7 @@ func main() {
 						{
 							"Effect": "Allow",
 							"Action": ["sns:Publish"],
-							"Resource": ["%s","%s"]
+							"Resource": ["%s","%s","%s"]
 						},
 						{
 							"Effect": "Allow",
@@ -853,7 +854,7 @@ func main() {
 							"Resource": "arn:aws:secretsmanager:*:*:secret:rez-agent/*"
 						}
 					]
-				}`, tableArn, tableArn, webActionResultsArn, webActionResultsArn, waQueueArn, noQueueArn, waTtopicArn, noTtopicArn)
+				}`, tableArn, tableArn, webActionResultsArn, webActionResultsArn, waQueueArn, noQueueArn, waTtopicArn, noTtopicArn, agentResponseTopicArn)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -1174,12 +1175,13 @@ func main() {
 		// Agent Lambda Function (using S3 for large package)
 		log.Printf("Creating agent Lambda function from S3...")
 		agentLambda, err := lambda.NewFunction(ctx, fmt.Sprintf("rez-agent-agent-%s", stage), &lambda.FunctionArgs{
-			Name:    pulumi.String(fmt.Sprintf("rez-agent-agent-%s", stage)),
-			Runtime: pulumi.String("python3.12"),
-			Role:    agentRole.Arn,
-			Handler: pulumi.String("main.lambda_handler"),
-			S3Bucket: lambdaDeploymentBucket.ID(),
-			S3Key:    agentZipObject.Key,
+			Name:            pulumi.String(fmt.Sprintf("rez-agent-agent-%s", stage)),
+			Runtime:         pulumi.String("python3.12"),
+			Role:            agentRole.Arn,
+			Handler:         pulumi.String("main.lambda_handler"),
+			S3Bucket:        lambdaDeploymentBucket.ID(),
+			S3Key:           agentZipObject.Key,
+			S3ObjectVersion: agentZipObject.VersionId,
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
 					"DYNAMODB_TABLE_NAME":      messagesTable.Name,
@@ -1189,6 +1191,12 @@ func main() {
 					"AGENT_RESPONSE_TOPIC_ARN": agentResponseTopic.Arn,
 					"AGENT_RESPONSE_QUEUE_URL": agentResponseQueue.Url,
 					"STAGE":                    pulumi.String(stage),
+					// Bedrock LLM Configuration
+					"BEDROCK_MODEL_ID":    pulumi.String("us.anthropic.claude-sonnet-4-20250514-v1:0"),
+					"BEDROCK_PROVIDER":    pulumi.String("anthropic"),
+					"BEDROCK_REGION":      pulumi.String("us-east-1"),
+					"BEDROCK_TEMPERATURE": pulumi.String("0.5"),
+					"BEDROCK_MAX_TOKENS":  pulumi.String("4096"),
 				},
 			},
 			MemorySize: pulumi.Int(1024),

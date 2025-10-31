@@ -9,8 +9,9 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 import boto3
+from langchain_aws import ChatBedrockConverse
 from langchain_aws import ChatBedrock
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
@@ -37,6 +38,16 @@ SESSION_TABLE_NAME = os.environ.get("AGENT_SESSION_TABLE_NAME")
 AGENT_RESPONSE_TOPIC_ARN = os.environ.get("AGENT_RESPONSE_TOPIC_ARN")
 AGENT_RESPONSE_QUEUE_URL = os.environ.get("AGENT_RESPONSE_QUEUE_URL")
 
+# Bedrock LLM Configuration
+BEDROCK_MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "arn:aws:bedrock:us-east-1:944945738659:inference-profile/global.anthropic.claude-sonnet-4-20250514-v1:0"
+)
+BEDROCK_PROVIDER = os.environ.get("BEDROCK_PROVIDER", "Anthropic")
+BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
+BEDROCK_TEMPERATURE = float(os.environ.get("BEDROCK_TEMPERATURE", "0.0"))
+BEDROCK_MAX_TOKENS = int(os.environ.get("BEDROCK_MAX_TOKENS", "4096"))
+
 # Initialize AWS clients
 dynamodb = boto3.resource("dynamodb")
 sns_client = boto3.client("sns")
@@ -46,7 +57,6 @@ cost_limiter = CostLimiter(DYNAMODB_TABLE_NAME, STAGE)
 
 # Initialize response handler
 response_handler = ResponseHandler(AGENT_RESPONSE_QUEUE_URL) if AGENT_RESPONSE_QUEUE_URL else None
-
 
 # Agent State
 class AgentState(BaseModel):
@@ -60,16 +70,6 @@ class AgentState(BaseModel):
 def create_agent_graph():
     """Create the LangGraph agent workflow"""
 
-    # Initialize Bedrock LLM
-    llm = ChatBedrock(
-        model_id="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        region_name="us-east-1",
-        model_kwargs={
-            "temperature": 0.0,
-            "max_tokens": 4096,
-        }
-    )
-
     # Load course configuration
     course_config = load_course_config()
 
@@ -81,6 +81,15 @@ def create_agent_graph():
         get_weather_tool,
         send_notification_tool,
     ]
+
+    # Initialize Bedrock LLM with tools
+    # ChatBedrockConverse supports tool binding via bind_tools()
+    llm = ChatBedrockConverse(
+        model_id=BEDROCK_MODEL_ID,
+        region_name=BEDROCK_REGION,
+        temperature=BEDROCK_TEMPERATURE,
+        max_tokens=BEDROCK_MAX_TOKENS
+    )
 
     # Bind tools to LLM
     llm_with_tools = llm.bind_tools(tools)
@@ -116,8 +125,61 @@ When searching for tee times, ask for the date, time range, and number of player
         state.messages.append(response)
         return state
 
-    # Define tool node
-    tool_node = ToolNode(tools)
+    # Define custom tool node for Bedrock Converse API compatibility
+    def tool_node(state: AgentState) -> AgentState:
+        """Execute tools and return properly formatted results for Converse API"""
+        last_message = state.messages[-1]
+
+        if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
+            return state
+
+        logger.info(f"Executing {len(last_message.tool_calls)} tool calls")
+
+        # Create a mapping of tool names to tool functions
+        tools_by_name = {tool.name: tool for tool in tools}
+
+        # Execute each tool call and create tool result messages
+        for tool_call in last_message.tool_calls:
+            tool_name = tool_call.get('name')
+            tool_args = tool_call.get('args', {})
+            tool_call_id = tool_call.get('id')
+
+            logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+
+            try:
+                # Get the tool and execute it
+                tool_func = tools_by_name.get(tool_name)
+                if tool_func:
+                    result = tool_func.invoke(tool_args)
+                    logger.info(f"Tool {tool_name} result: {result}")
+
+                    # Create a ToolMessage with the result
+                    tool_message = ToolMessage(
+                        content=str(result),
+                        tool_call_id=tool_call_id,
+                        name=tool_name
+                    )
+                    state.messages.append(tool_message)
+                else:
+                    logger.error(f"Tool not found: {tool_name}")
+                    # Add error message
+                    tool_message = ToolMessage(
+                        content=f"Error: Tool {tool_name} not found",
+                        tool_call_id=tool_call_id,
+                        name=tool_name
+                    )
+                    state.messages.append(tool_message)
+            except Exception as e:
+                logger.error(f"Error executing tool {tool_name}: {e}", exc_info=True)
+                # Add error message
+                tool_message = ToolMessage(
+                    content=f"Error executing tool: {str(e)}",
+                    tool_call_id=tool_call_id,
+                    name=tool_name
+                )
+                state.messages.append(tool_message)
+
+        return state
 
     # Should continue to tools or end?
     def should_continue(state: AgentState) -> str:
@@ -358,7 +420,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         has_async_tools = False
         tool_calls = []
 
-        for msg in result.messages:
+        for msg in result['messages']:
             if hasattr(msg, 'tool_calls') and msg.tool_calls:
                 for tool_call in msg.tool_calls:
                     tool_name = tool_call.get('name', '')
@@ -386,7 +448,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 # Add tool responses to agent context
                 if tool_responses:
                     tool_response_message = "\n\n".join(tool_responses)
-                    result.messages.append(HumanMessage(content=f"Tool Results:\n{tool_response_message}"))
+                    result['messages'].append(HumanMessage(content=f"Tool Results:\n{tool_response_message}"))
 
                     # Re-invoke agent with tool results
                     logger.info("Re-invoking agent with tool responses")
@@ -394,12 +456,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             else:
                 logger.warning("No tool responses received within timeout")
                 # Add a message indicating tools are processing
-                result.messages.append(AIMessage(
+                result['messages'].append(AIMessage(
                     content="I've submitted your request for processing. The results should be available shortly."
                 ))
 
         # Extract final response
-        final_message = result.messages[-1]
+        final_message = result['messages'][-1]
         response_content = final_message.content if hasattr(final_message, 'content') else str(final_message)
 
         # Update actual cost based on token usage (if available from response metadata)
@@ -421,7 +483,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         # Save session with updated messages
         session_messages = []
-        for msg in result.messages:
+        for msg in result['messages']:
             if isinstance(msg, HumanMessage):
                 session_messages.append({"role": "user", "content": msg.content})
             elif isinstance(msg, AIMessage):

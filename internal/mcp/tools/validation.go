@@ -36,8 +36,11 @@ func ValidateInputAgainstSchema(args map[string]interface{}, schema protocol.Inp
 func validateValue(fieldName string, value interface{}, prop protocol.Property) error {
 	// Check type
 	actualType := getJSONType(value)
-	if actualType != prop.Type && prop.Type != "" {
-		return fmt.Errorf("field %s: expected type %s, got %s", fieldName, prop.Type, actualType)
+	// Allow "number" for "integer" type since JSON numbers are all float64
+	if prop.Type != "" && actualType != prop.Type {
+		if !(prop.Type == "integer" && actualType == "number") {
+			return fmt.Errorf("field %s: expected type %s, got %s", fieldName, prop.Type, actualType)
+		}
 	}
 
 	// Type-specific validation

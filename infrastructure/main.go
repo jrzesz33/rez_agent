@@ -1042,6 +1042,162 @@ func main() {
 		}
 
 		// ========================================
+		// MCP Lambda Function
+		// ========================================
+
+		log.Printf("Creating MCP Lambda function...")
+
+		// MCP Lambda Role
+		mcpRole, err := iam.NewRole(ctx, fmt.Sprintf("rez-agent-mcp-role-%s", stage), &iam.RoleArgs{
+			Name: pulumi.String(fmt.Sprintf("rez-agent-mcp-role-%s", stage)),
+			AssumeRolePolicy: pulumi.String(`{
+				"Version": "2012-10-17",
+				"Statement": [{
+					"Effect": "Allow",
+					"Principal": {"Service": "lambda.amazonaws.com"},
+					"Action": "sts:AssumeRole"
+				}]
+			}`),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// MCP Lambda Policy
+		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-mcp-policy-%s", stage), &iam.RolePolicyArgs{
+			Role: mcpRole.Name,
+			Policy: pulumi.All(messagesTable.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
+				tableArn := args[0].(string)
+				topicArn := args[1].(string)
+				return fmt.Sprintf(`{
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Action": [
+								"dynamodb:GetItem",
+								"dynamodb:PutItem",
+								"dynamodb:UpdateItem"
+							],
+							"Resource": ["%s", "%s/*"]
+						},
+						{
+							"Effect": "Allow",
+							"Action": ["sns:Publish"],
+							"Resource": "%s"
+						},
+						{
+							"Effect": "Allow",
+							"Action": ["secretsmanager:GetSecretValue"],
+							"Resource": "arn:aws:secretsmanager:*:*:secret:rez-agent/*"
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"logs:CreateLogGroup",
+								"logs:CreateLogStream",
+								"logs:PutLogEvents"
+							],
+							"Resource": "arn:aws:logs:*:*:*"
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"xray:PutTraceSegments",
+								"xray:PutTelemetryRecords"
+							],
+							"Resource": "*"
+						}
+					]
+				}`, tableArn, tableArn, topicArn)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
+		// MCP Lambda Log Group
+		mcpLogGroup, err := cloudwatch.NewLogGroup(ctx, fmt.Sprintf("rez-agent-mcp-logs-%s", stage), &cloudwatch.LogGroupArgs{
+			Name:            pulumi.String(fmt.Sprintf("/aws/lambda/rez-agent-mcp-%s", stage)),
+			RetentionInDays: pulumi.Int(logRetentionDays),
+			Tags:            commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// MCP Lambda Function
+		mcpLambda, err := lambda.NewFunction(ctx, fmt.Sprintf("rez-agent-mcp-%s", stage), &lambda.FunctionArgs{
+			Name:    pulumi.String(fmt.Sprintf("rez-agent-mcp-%s", stage)),
+			Runtime: pulumi.String("provided.al2"),
+			Role:    mcpRole.Arn,
+			Handler: pulumi.String("bootstrap"),
+			Code:    pulumi.NewFileArchive("../build/mcp.zip"),
+			Environment: &lambda.FunctionEnvironmentArgs{
+				Variables: pulumi.StringMap{
+					"MCP_SERVER_NAME":        pulumi.String("rez-agent-mcp"),
+					"MCP_SERVER_VERSION":     pulumi.String("1.0.0"),
+					"DYNAMODB_TABLE_NAME":    messagesTable.Name,
+					"NOTIFICATIONS_TOPIC_ARN": notificationsTopic.Arn,
+					"NTFY_URL":               pulumi.String(ntfyUrl),
+					"STAGE":                  pulumi.String(stage),
+					"GOLF_SECRET_NAME":       pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
+					"WEATHER_API_KEY_SECRET": pulumi.String(fmt.Sprintf("rez-agent/weather/api-key-%s", stage)),
+					"AWS_REGION":             pulumi.String("us-east-1"),
+				},
+			},
+			MemorySize: pulumi.Int(512),
+			Timeout:    pulumi.Int(30),
+			TracingConfig: &lambda.FunctionTracingConfigArgs{
+				Mode: pulumi.String(map[bool]string{true: "Active", false: "PassThrough"}[enableXRay]),
+			},
+			Tags: commonTags,
+		}, pulumi.DependsOn([]pulumi.Resource{mcpLogGroup}))
+		if err != nil {
+			return err
+		}
+
+		// Lambda permission for API Gateway to invoke MCP
+		_, err = lambda.NewPermission(ctx, fmt.Sprintf("rez-agent-mcp-apigw-permission-%s", stage), &lambda.PermissionArgs{
+			Action:    pulumi.String("lambda:InvokeFunction"),
+			Function:  mcpLambda.Name,
+			Principal: pulumi.String("apigateway.amazonaws.com"),
+			SourceArn: httpApi.ExecutionArn.ApplyT(func(arn string) string {
+				return fmt.Sprintf("%s/*/*", arn)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
+		// API Gateway Integration for MCP
+		mcpApiIntegration, err := apigatewayv2.NewIntegration(ctx, fmt.Sprintf("rez-agent-mcp-api-integration-%s", stage), &apigatewayv2.IntegrationArgs{
+			ApiId:                httpApi.ID(),
+			IntegrationType:      pulumi.String("AWS_PROXY"),
+			IntegrationUri:       mcpLambda.Arn,
+			IntegrationMethod:    pulumi.String("POST"),
+			PayloadFormatVersion: pulumi.String("2.0"),
+		})
+		if err != nil {
+			return err
+		}
+
+		// API Gateway Route for MCP
+		_, err = apigatewayv2.NewRoute(ctx, fmt.Sprintf("rez-agent-mcp-route-%s", stage), &apigatewayv2.RouteArgs{
+			ApiId:    httpApi.ID(),
+			RouteKey: pulumi.String("POST /mcp"),
+			Target: mcpApiIntegration.ID().ApplyT(func(id string) string {
+				return fmt.Sprintf("integrations/%s", id)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
+		log.Printf("MCP Lambda function created successfully")
+
+		// ========================================
 		// AI Agent Infrastructure
 		// ========================================
 
@@ -1351,6 +1507,7 @@ func main() {
 		ctx.Export("webactionLambdaArn", webactionLambda.Arn)
 		ctx.Export("webapiLambdaArn", webapiLambda.Arn)
 		ctx.Export("agentLambdaArn", agentLambda.Arn)
+		ctx.Export("mcpLambdaArn", mcpLambda.Arn)
 
 		// Agent Infrastructure
 		ctx.Export("agentResponseTopicArn", agentResponseTopic.Arn)

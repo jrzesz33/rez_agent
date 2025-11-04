@@ -202,3 +202,8 @@ func GetBoolArg(args map[string]interface{}, key string, defaultValue bool) bool
 	}
 	return defaultValue
 }
+
+// intPtr returns a pointer to an integer (helper for schema definitions)
+func intPtr(i int) *int {
+	return &i
+}

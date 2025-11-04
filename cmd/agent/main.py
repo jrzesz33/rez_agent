@@ -16,20 +16,35 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
-from agent_tools import (
-    get_reservations_tool,
-    search_tee_times_tool,
-    book_tee_time_tool,
-    get_weather_tool,
-    send_notification_tool,
-)
+# Configure logging (must be before any logger usage)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Import MCP-based tools (synchronous execution via MCP server)
+# Fallback to legacy SNS-based tools if MCP is not available
+try:
+    from agent_tools_mcp import (
+        get_reservations_tool,
+        search_tee_times_tool,
+        book_tee_time_tool,
+        get_weather_tool,
+        send_notification_tool,
+    )
+    logger.info("Using MCP-based tools")
+    USING_MCP = True
+except Exception as e:
+    logger.warning(f"MCP tools not available, falling back to legacy tools: {e}")
+    from agent_tools import (
+        get_reservations_tool,
+        search_tee_times_tool,
+        book_tee_time_tool,
+        get_weather_tool,
+        send_notification_tool,
+    )
+    USING_MCP = False
 from course_config import load_course_config
 from cost_limiter import CostLimiter
 from response_handler import ResponseHandler
-
-# Configure logging
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
 
 # Environment variables
 STAGE = os.environ.get("STAGE", "dev")
@@ -416,49 +431,54 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         agent = get_agent()
         result = agent.invoke(state)
 
-        # Check if agent called any async tools (reservations, tee times, weather)
-        has_async_tools = False
-        tool_calls = []
+        # If using legacy SNS-based tools, poll for async responses
+        # With MCP tools, execution is synchronous and results are already in the messages
+        if not USING_MCP:
+            # Check if agent called any async tools (reservations, tee times, weather)
+            has_async_tools = False
+            tool_calls = []
 
-        for msg in result['messages']:
-            if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    tool_name = tool_call.get('name', '')
-                    if tool_name in ['get_reservations_tool', 'search_tee_times_tool',
-                                    'book_tee_time_tool', 'get_weather_tool']:
-                        has_async_tools = True
-                        tool_calls.append(tool_name)
+            for msg in result['messages']:
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        tool_name = tool_call.get('name', '')
+                        if tool_name in ['get_reservations_tool', 'search_tee_times_tool',
+                                        'book_tee_time_tool', 'get_weather_tool']:
+                            has_async_tools = True
+                            tool_calls.append(tool_name)
 
-        # If async tools were called, poll for responses
-        tool_responses = []
-        if has_async_tools and response_handler:
-            logger.info(f"Polling for {len(tool_calls)} async tool responses...")
+            # If async tools were called, poll for responses
+            tool_responses = []
+            if has_async_tools and response_handler:
+                logger.info(f"Polling for {len(tool_calls)} async tool responses...")
 
-            # Poll for responses with timeout
-            responses = response_handler.poll_responses(timeout_seconds=30)
+                # Poll for responses with timeout
+                responses = response_handler.poll_responses(timeout_seconds=30)
 
-            if responses:
-                logger.info(f"Received {len(responses)} tool responses")
+                if responses:
+                    logger.info(f"Received {len(responses)} tool responses")
 
-                # Format responses for agent
-                for response in responses:
-                    formatted = response_handler.format_response_for_agent(response)
-                    tool_responses.append(formatted)
+                    # Format responses for agent
+                    for response in responses:
+                        formatted = response_handler.format_response_for_agent(response)
+                        tool_responses.append(formatted)
 
-                # Add tool responses to agent context
-                if tool_responses:
-                    tool_response_message = "\n\n".join(tool_responses)
-                    result['messages'].append(HumanMessage(content=f"Tool Results:\n{tool_response_message}"))
+                    # Add tool responses to agent context
+                    if tool_responses:
+                        tool_response_message = "\n\n".join(tool_responses)
+                        result['messages'].append(HumanMessage(content=f"Tool Results:\n{tool_response_message}"))
 
-                    # Re-invoke agent with tool results
-                    logger.info("Re-invoking agent with tool responses")
-                    result = agent.invoke(result)
-            else:
-                logger.warning("No tool responses received within timeout")
-                # Add a message indicating tools are processing
-                result['messages'].append(AIMessage(
-                    content="I've submitted your request for processing. The results should be available shortly."
-                ))
+                        # Re-invoke agent with tool results
+                        logger.info("Re-invoking agent with tool responses")
+                        result = agent.invoke(result)
+                else:
+                    logger.warning("No tool responses received within timeout")
+                    # Add a message indicating tools are processing
+                    result['messages'].append(AIMessage(
+                        content="I've submitted your request for processing. The results should be available shortly."
+                    ))
+        else:
+            logger.info("Using MCP tools - synchronous execution, no polling needed")
 
         # Extract final response
         final_message = result['messages'][-1]

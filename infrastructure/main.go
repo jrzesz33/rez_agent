@@ -1136,15 +1136,15 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/mcp.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"MCP_SERVER_NAME":        pulumi.String("rez-agent-mcp"),
-					"MCP_SERVER_VERSION":     pulumi.String("1.0.0"),
-					"DYNAMODB_TABLE_NAME":    messagesTable.Name,
-					"NOTIFICATIONS_TOPIC_ARN": notificationsTopic.Arn,
-					"NTFY_URL":               pulumi.String(ntfyUrl),
-					"STAGE":                  pulumi.String(stage),
-					"GOLF_SECRET_NAME":       pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
-					"WEATHER_API_KEY_SECRET": pulumi.String(fmt.Sprintf("rez-agent/weather/api-key-%s", stage)),
-					"AWS_REGION":             pulumi.String("us-east-1"),
+					"MCP_SERVER_NAME":            pulumi.String("rez-agent-mcp"),
+					"MCP_SERVER_VERSION":         pulumi.String("1.0.0"),
+					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
+					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn,
+					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
+					"NTFY_URL":                   pulumi.String(ntfyUrl),
+					"STAGE":                      pulumi.String(stage),
+					"GOLF_SECRET_NAME":           pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
+					"WEATHER_API_KEY_SECRET":     pulumi.String(fmt.Sprintf("rez-agent/weather/api-key-%s", stage)),
 				},
 			},
 			MemorySize: pulumi.Int(512),
@@ -1331,13 +1331,13 @@ func main() {
 		// Agent Lambda Function (using S3 for large package)
 		log.Printf("Creating agent Lambda function from S3...")
 		agentLambda, err := lambda.NewFunction(ctx, fmt.Sprintf("rez-agent-agent-%s", stage), &lambda.FunctionArgs{
-			Name:            pulumi.String(fmt.Sprintf("rez-agent-agent-%s", stage)),
-			Runtime:         pulumi.String("python3.12"),
-			Role:            agentRole.Arn,
-			Handler:         pulumi.String("main.lambda_handler"),
-			S3Bucket:        lambdaDeploymentBucket.ID(),
-			S3Key:           agentZipObject.Key,
-			S3ObjectVersion: agentZipObject.VersionId,
+			Name:           pulumi.String(fmt.Sprintf("rez-agent-agent-%s", stage)),
+			Runtime:        pulumi.String("python3.12"),
+			Role:           agentRole.Arn,
+			Handler:        pulumi.String("main.lambda_handler"),
+			S3Bucket:       lambdaDeploymentBucket.ID(),
+			S3Key:          agentZipObject.Key,
+			SourceCodeHash: agentZipObject.Etag, // Use ETag to detect file changes (works without versioning)
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
 					"DYNAMODB_TABLE_NAME":      messagesTable.Name,
@@ -1347,6 +1347,12 @@ func main() {
 					"AGENT_RESPONSE_TOPIC_ARN": agentResponseTopic.Arn,
 					"AGENT_RESPONSE_QUEUE_URL": agentResponseQueue.Url,
 					"STAGE":                    pulumi.String(stage),
+					// MCP Server Configuration
+					"MCP_SERVER_URL": httpApi.ApiEndpoint.ApplyT(func(endpoint string) string {
+						return fmt.Sprintf("%s/mcp", endpoint)
+					}).(pulumi.StringOutput),
+					// Note: MCP_API_KEY should be set via AWS Parameter Store or Secrets Manager
+					// For now, omitting it (MCP Lambda will allow unauthenticated requests for internal use)
 					// Bedrock LLM Configuration
 					"BEDROCK_MODEL_ID":    pulumi.String("us.anthropic.claude-sonnet-4-20250514-v1:0"),
 					"BEDROCK_PROVIDER":    pulumi.String("anthropic"),

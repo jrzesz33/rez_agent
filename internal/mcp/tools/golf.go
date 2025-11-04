@@ -4,26 +4,34 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/mcp/protocol"
 	"github.com/jrzesz33/rez_agent/internal/models"
 	"github.com/jrzesz33/rez_agent/internal/secrets"
 	"github.com/jrzesz33/rez_agent/internal/webaction"
+	"github.com/jrzesz33/rez_agent/pkg/courses"
 )
 
 // GolfReservationsTool implements the golf_get_reservations MCP tool
 type GolfReservationsTool struct {
 	golfHandler *webaction.GolfHandler
 	logger      *slog.Logger
+	stage       string
 }
 
 // NewGolfReservationsTool creates a new golf reservations tool
 func NewGolfReservationsTool(httpClient *httpclient.Client, oauthClient *httpclient.OAuthClient,
 	secretsManager *secrets.Manager, logger *slog.Logger) *GolfReservationsTool {
+	stage := os.Getenv("STAGE")
+	if stage == "" {
+		stage = "dev"
+	}
 	return &GolfReservationsTool{
 		golfHandler: webaction.NewGolfHandler(httpClient, oauthClient, secretsManager, logger),
 		logger:      logger,
+		stage:       stage,
 	}
 }
 
@@ -35,24 +43,12 @@ func (t *GolfReservationsTool) GetDefinition() protocol.Tool {
 		InputSchema: protocol.InputSchema{
 			Type: "object",
 			Properties: map[string]protocol.Property{
-				"api_url": {
+				"course_name": {
 					Type:        "string",
-					Description: "Golf course API URL for fetching reservations",
-				},
-				"token_url": {
-					Type:        "string",
-					Description: "OAuth token endpoint URL",
-				},
-				"jwks_url": {
-					Type:        "string",
-					Description: "JWKS URL for JWT verification",
-				},
-				"secret_name": {
-					Type:        "string",
-					Description: "AWS Secrets Manager secret name for golf credentials",
+					Description: "Name of the golf course (e.g., 'Birdsfoot Golf Course' or 'Totteridge')",
 				},
 			},
-			Required: []string{"api_url", "token_url", "secret_name"},
+			Required: []string{"course_name"},
 		},
 	}
 }
@@ -64,13 +60,38 @@ func (t *GolfReservationsTool) ValidateInput(args map[string]interface{}) error 
 
 // Execute runs the tool with the given arguments
 func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]interface{}) ([]protocol.Content, error) {
-	apiURL := GetStringArg(args, "api_url", "")
-	tokenURL := GetStringArg(args, "token_url", "")
-	jwksURL := GetStringArg(args, "jwks_url", "")
-	secretName := GetStringArg(args, "secret_name", "")
+	courseName := GetStringArg(args, "course_name", "")
 
-	t.logger.Info("fetching golf reservations",
+	t.logger.Info("fetching golf reservations", slog.String("course_name", courseName))
+
+	// Load course configuration
+	course, err := courses.GetCourseByName(courseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find course: %w", err)
+	}
+
+	// Build URLs from course config
+	apiURL, err := course.GetActionURL("get-reservations")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reservations URL: %w", err)
+	}
+
+	tokenURL, err := course.GetActionURL("token-url")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token URL: %w", err)
+	}
+
+	jwksURL, err := course.GetActionURL("jwks-url")
+	if err != nil {
+		// JWKS URL is optional
+		jwksURL = ""
+	}
+
+	secretName := course.GetSecretName(t.stage)
+
+	t.logger.Info("using course configuration",
 		slog.String("api_url", apiURL),
+		slog.String("token_url", tokenURL),
 	)
 
 	// Create web action payload
@@ -108,14 +129,20 @@ func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]inte
 type GolfSearchTeeTimesTool struct {
 	golfHandler *webaction.GolfHandler
 	logger      *slog.Logger
+	stage       string
 }
 
 // NewGolfSearchTeeTimesTool creates a new golf tee time search tool
 func NewGolfSearchTeeTimesTool(httpClient *httpclient.Client, oauthClient *httpclient.OAuthClient,
 	secretsManager *secrets.Manager, logger *slog.Logger) *GolfSearchTeeTimesTool {
+	stage := os.Getenv("STAGE")
+	if stage == "" {
+		stage = "dev"
+	}
 	return &GolfSearchTeeTimesTool{
 		golfHandler: webaction.NewGolfHandler(httpClient, oauthClient, secretsManager, logger),
 		logger:      logger,
+		stage:       stage,
 	}
 }
 
@@ -127,36 +154,19 @@ func (t *GolfSearchTeeTimesTool) GetDefinition() protocol.Tool {
 		InputSchema: protocol.InputSchema{
 			Type: "object",
 			Properties: map[string]protocol.Property{
-				"api_url": {
+				"course_name": {
 					Type:        "string",
-					Description: "Golf course API URL for searching tee times",
+					Description: "Name of the golf course (e.g., 'Birdsfoot Golf Course' or 'Totteridge')",
 				},
-				"token_url": {
+				"start_time": {
 					Type:        "string",
-					Description: "OAuth token endpoint URL",
+					Description: "Start datetime in ISO format (YYYY-MM-DDTHH:MM:SS)",
 				},
-				"jwks_url": {
+				"end_time": {
 					Type:        "string",
-					Description: "JWKS URL for JWT verification",
+					Description: "End datetime in ISO format (YYYY-MM-DDTHH:MM:SS)",
 				},
-				"secret_name": {
-					Type:        "string",
-					Description: "AWS Secrets Manager secret name for golf credentials",
-				},
-				"date": {
-					Type:        "string",
-					Format:      "date",
-					Description: "Date to search (YYYY-MM-DD)",
-				},
-				"time_range_start": {
-					Type:        "string",
-					Description: "Earliest time (HH:MM, 24-hour format)",
-				},
-				"time_range_end": {
-					Type:        "string",
-					Description: "Latest time (HH:MM, 24-hour format)",
-				},
-				"players": {
+				"num_players": {
 					Type:        "integer",
 					Minimum:     intPtr(1),
 					Maximum:     intPtr(4),
@@ -168,7 +178,7 @@ func (t *GolfSearchTeeTimesTool) GetDefinition() protocol.Tool {
 					Description: "Automatically book the earliest available time",
 				},
 			},
-			Required: []string{"api_url", "token_url", "secret_name", "date", "players"},
+			Required: []string{"course_name", "start_time", "end_time", "num_players"},
 		},
 	}
 }
@@ -180,20 +190,46 @@ func (t *GolfSearchTeeTimesTool) ValidateInput(args map[string]interface{}) erro
 
 // Execute runs the tool with the given arguments
 func (t *GolfSearchTeeTimesTool) Execute(ctx context.Context, args map[string]interface{}) ([]protocol.Content, error) {
-	apiURL := GetStringArg(args, "api_url", "")
-	tokenURL := GetStringArg(args, "token_url", "")
-	jwksURL := GetStringArg(args, "jwks_url", "")
-	secretName := GetStringArg(args, "secret_name", "")
-	date := GetStringArg(args, "date", "")
-	timeStart := GetStringArg(args, "time_range_start", "")
-	timeEnd := GetStringArg(args, "time_range_end", "")
-	players := GetIntArg(args, "players", 1)
+	courseName := GetStringArg(args, "course_name", "")
+	startTime := GetStringArg(args, "start_time", "")
+	endTime := GetStringArg(args, "end_time", "")
+	numPlayers := GetIntArg(args, "num_players", 1)
 	autoBook := GetBoolArg(args, "auto_book", false)
 
 	t.logger.Info("searching for tee times",
-		slog.String("date", date),
-		slog.Int("players", players),
+		slog.String("course_name", courseName),
+		slog.String("start_time", startTime),
+		slog.Int("num_players", numPlayers),
 		slog.Bool("auto_book", autoBook),
+	)
+
+	// Load course configuration
+	course, err := courses.GetCourseByName(courseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find course: %w", err)
+	}
+
+	// Build URLs from course config
+	apiURL, err := course.GetActionURL("search-tee-times")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get search URL: %w", err)
+	}
+
+	tokenURL, err := course.GetActionURL("token-url")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token URL: %w", err)
+	}
+
+	jwksURL, err := course.GetActionURL("jwks-url")
+	if err != nil {
+		jwksURL = ""
+	}
+
+	secretName := course.GetSecretName(t.stage)
+
+	t.logger.Info("using course configuration",
+		slog.String("api_url", apiURL),
+		slog.String("token_url", tokenURL),
 	)
 
 	// Create web action payload
@@ -208,12 +244,11 @@ func (t *GolfSearchTeeTimesTool) Execute(ctx context.Context, args map[string]in
 			JWKSURL:    jwksURL,
 		},
 		Arguments: map[string]interface{}{
-			"operation":        "search_tee_times",
-			"date":             date,
-			"time_range_start": timeStart,
-			"time_range_end":   timeEnd,
-			"players":          players,
-			"auto_book":        autoBook,
+			"operation":  "search_tee_times",
+			"start_time": startTime,
+			"end_time":   endTime,
+			"num_players": numPlayers,
+			"auto_book":  autoBook,
 		},
 	}
 
@@ -236,14 +271,20 @@ func (t *GolfSearchTeeTimesTool) Execute(ctx context.Context, args map[string]in
 type GolfBookTeeTimeTool struct {
 	golfHandler *webaction.GolfHandler
 	logger      *slog.Logger
+	stage       string
 }
 
 // NewGolfBookTeeTimeTool creates a new golf tee time booking tool
 func NewGolfBookTeeTimeTool(httpClient *httpclient.Client, oauthClient *httpclient.OAuthClient,
 	secretsManager *secrets.Manager, logger *slog.Logger) *GolfBookTeeTimeTool {
+	stage := os.Getenv("STAGE")
+	if stage == "" {
+		stage = "dev"
+	}
 	return &GolfBookTeeTimeTool{
 		golfHandler: webaction.NewGolfHandler(httpClient, oauthClient, secretsManager, logger),
 		logger:      logger,
+		stage:       stage,
 	}
 }
 
@@ -255,43 +296,16 @@ func (t *GolfBookTeeTimeTool) GetDefinition() protocol.Tool {
 		InputSchema: protocol.InputSchema{
 			Type: "object",
 			Properties: map[string]protocol.Property{
-				"api_url": {
+				"course_name": {
 					Type:        "string",
-					Description: "Golf course API URL for booking",
+					Description: "Name of the golf course (e.g., 'Birdsfoot Golf Course' or 'Totteridge')",
 				},
-				"token_url": {
-					Type:        "string",
-					Description: "OAuth token endpoint URL",
-				},
-				"jwks_url": {
-					Type:        "string",
-					Description: "JWKS URL for JWT verification (required for booking)",
-				},
-				"secret_name": {
-					Type:        "string",
-					Description: "AWS Secrets Manager secret name for golf credentials",
-				},
-				"tee_time_id": {
-					Type:        "string",
-					Description: "Tee time identifier from search results",
-				},
-				"date": {
-					Type:        "string",
-					Format:      "date",
-					Description: "Date of the tee time (YYYY-MM-DD)",
-				},
-				"time": {
-					Type:        "string",
-					Description: "Time of the tee time (HH:MM, 24-hour format)",
-				},
-				"players": {
+				"tee_sheet_id": {
 					Type:        "integer",
-					Minimum:     intPtr(1),
-					Maximum:     intPtr(4),
-					Description: "Number of players",
+					Description: "The tee sheet ID from search results",
 				},
 			},
-			Required: []string{"api_url", "token_url", "jwks_url", "secret_name", "tee_time_id", "date", "time", "players"},
+			Required: []string{"course_name", "tee_sheet_id"},
 		},
 	}
 }
@@ -303,20 +317,41 @@ func (t *GolfBookTeeTimeTool) ValidateInput(args map[string]interface{}) error {
 
 // Execute runs the tool with the given arguments
 func (t *GolfBookTeeTimeTool) Execute(ctx context.Context, args map[string]interface{}) ([]protocol.Content, error) {
-	apiURL := GetStringArg(args, "api_url", "")
-	tokenURL := GetStringArg(args, "token_url", "")
-	jwksURL := GetStringArg(args, "jwks_url", "")
-	secretName := GetStringArg(args, "secret_name", "")
-	teeTimeID := GetStringArg(args, "tee_time_id", "")
-	date := GetStringArg(args, "date", "")
-	time := GetStringArg(args, "time", "")
-	players := GetIntArg(args, "players", 1)
+	courseName := GetStringArg(args, "course_name", "")
+	teeSheetID := GetIntArg(args, "tee_sheet_id", 0)
 
 	t.logger.Info("booking tee time",
-		slog.String("tee_time_id", teeTimeID),
-		slog.String("date", date),
-		slog.String("time", time),
-		slog.Int("players", players),
+		slog.String("course_name", courseName),
+		slog.Int("tee_sheet_id", teeSheetID),
+	)
+
+	// Load course configuration
+	course, err := courses.GetCourseByName(courseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find course: %w", err)
+	}
+
+	// Build URLs from course config
+	apiURL, err := course.GetActionURL("book-tee-time")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get booking URL: %w", err)
+	}
+
+	tokenURL, err := course.GetActionURL("token-url")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token URL: %w", err)
+	}
+
+	jwksURL, err := course.GetActionURL("jwks-url")
+	if err != nil {
+		jwksURL = ""
+	}
+
+	secretName := course.GetSecretName(t.stage)
+
+	t.logger.Info("using course configuration",
+		slog.String("api_url", apiURL),
+		slog.String("token_url", tokenURL),
 	)
 
 	// Create web action payload
@@ -331,11 +366,8 @@ func (t *GolfBookTeeTimeTool) Execute(ctx context.Context, args map[string]inter
 			JWKSURL:    jwksURL,
 		},
 		Arguments: map[string]interface{}{
-			"operation":   "book_tee_time",
-			"tee_time_id": teeTimeID,
-			"date":        date,
-			"time":        time,
-			"players":     players,
+			"operation":    "book_tee_time",
+			"tee_sheet_id": teeSheetID,
 		},
 	}
 

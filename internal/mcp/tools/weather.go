@@ -188,6 +188,3 @@ func (t *WeatherTool) formatWeatherForecast(data WeatherAPIResponse, numDays int
 }
 
 // Helper function to create int pointer
-func intPtr(i int) *int {
-	return &i
-}

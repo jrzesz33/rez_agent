@@ -247,7 +247,7 @@ Negligible cost due to low invocation frequency (60 messages/month).
     "auth_config": {
       "type": "oauth_password",
       "token_url": "https://birdsfoot.cps.golf/identityapi/connect/token",
-      "secret_name": "HIDE"
+      "secret_name": "rez-agent/golf/credentials-prod"
     },
     "stage": "dev",
     "message_type":"web_action"

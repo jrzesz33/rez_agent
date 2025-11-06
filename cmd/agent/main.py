@@ -16,6 +16,14 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
+# Import Bedrock configuration for rate limiting and retry logic
+from bedrock_config import (
+    create_bedrock_client,
+    get_rate_limiter,
+    with_rate_limit,
+    with_exponential_backoff
+)
+
 # Configure logging (must be before any logger usage)
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -63,6 +71,15 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 BEDROCK_TEMPERATURE = float(os.environ.get("BEDROCK_TEMPERATURE", "0.0"))
 BEDROCK_MAX_TOKENS = int(os.environ.get("BEDROCK_MAX_TOKENS", "4096"))
 
+# Bedrock Throttling Configuration
+BEDROCK_RATE_LIMIT = int(os.environ.get("BEDROCK_RATE_LIMIT", "30"))  # requests per minute
+BEDROCK_MAX_RETRIES = int(os.environ.get("BEDROCK_MAX_RETRIES", "10"))
+BEDROCK_BASE_DELAY = float(os.environ.get("BEDROCK_BASE_DELAY", "1.0"))
+BEDROCK_MAX_DELAY = float(os.environ.get("BEDROCK_MAX_DELAY", "60.0"))
+BEDROCK_APP_RETRIES = int(os.environ.get("BEDROCK_APP_RETRIES", "5"))
+BEDROCK_APP_BASE_DELAY = float(os.environ.get("BEDROCK_APP_BASE_DELAY", "2.0"))
+BEDROCK_APP_MAX_DELAY = float(os.environ.get("BEDROCK_APP_MAX_DELAY", "30.0"))
+
 # Initialize AWS clients
 dynamodb = boto3.resource("dynamodb")
 sns_client = boto3.client("sns")
@@ -72,6 +89,18 @@ cost_limiter = CostLimiter(DYNAMODB_TABLE_NAME, STAGE)
 
 # Initialize response handler
 response_handler = ResponseHandler(AGENT_RESPONSE_QUEUE_URL) if AGENT_RESPONSE_QUEUE_URL else None
+
+# Set global rate limit from environment
+from bedrock_config import set_rate_limit
+set_rate_limit(BEDROCK_RATE_LIMIT)
+
+# Log throttling configuration on startup
+logger.info(
+    f"Bedrock throttling configuration: "
+    f"rate_limit={BEDROCK_RATE_LIMIT} req/min, "
+    f"max_retries={BEDROCK_MAX_RETRIES}, "
+    f"app_retries={BEDROCK_APP_RETRIES}"
+)
 
 # Agent State
 class AgentState(BaseModel):
@@ -99,15 +128,27 @@ def create_agent_graph():
 
     # Initialize Bedrock LLM with tools
     # ChatBedrockConverse supports tool binding via bind_tools()
+    # Create a custom boto3 client with optimized retry configuration
+    bedrock_client = create_bedrock_client(
+        region_name=BEDROCK_REGION,
+        max_retries=BEDROCK_MAX_RETRIES,
+        base_delay=BEDROCK_BASE_DELAY,
+        max_delay=BEDROCK_MAX_DELAY
+    )
+
     llm = ChatBedrockConverse(
         model_id=BEDROCK_MODEL_ID,
         region_name=BEDROCK_REGION,
         temperature=BEDROCK_TEMPERATURE,
-        max_tokens=BEDROCK_MAX_TOKENS
+        max_tokens=BEDROCK_MAX_TOKENS,
+        client=bedrock_client  # Use our configured client
     )
 
     # Bind tools to LLM
     llm_with_tools = llm.bind_tools(tools)
+
+    # Get rate limiter instance
+    rate_limiter = get_rate_limiter()
 
     # Define agent node
     def agent_node(state: AgentState) -> AgentState:
@@ -132,9 +173,33 @@ Always be friendly, clear, and confirm actions with users before booking.
 When searching for tee times, ask for the date, time range, and number of players if not provided.
 """)
 
-        # Invoke LLM with tools
+        # Invoke LLM with tools (with rate limiting and retry logic)
         messages = [system_msg] + state.messages
-        response = llm_with_tools.invoke(messages)
+
+        # Acquire rate limit token before making request
+        if not rate_limiter.acquire(timeout=30.0):
+            logger.error("Rate limiter timeout - too many concurrent requests")
+            raise Exception("Rate limit exceeded: too many concurrent requests to Bedrock")
+
+        # Wrap the LLM invocation with exponential backoff for throttling errors
+        @with_exponential_backoff(
+            max_retries=BEDROCK_APP_RETRIES,
+            base_delay=BEDROCK_APP_BASE_DELAY,
+            max_delay=BEDROCK_APP_MAX_DELAY
+        )
+        def invoke_llm():
+            return llm_with_tools.invoke(messages)
+
+        try:
+            response = invoke_llm()
+        except Exception as e:
+            logger.error(f"Error invoking LLM after retries: {e}", exc_info=True)
+            # Create a user-friendly error response
+            error_msg = (
+                "I'm experiencing high traffic right now. "
+                "Please try again in a few moments."
+            )
+            response = AIMessage(content=error_msg)
 
         # Add response to messages
         state.messages.append(response)
@@ -470,7 +535,15 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
                         # Re-invoke agent with tool results
                         logger.info("Re-invoking agent with tool responses")
-                        result = agent.invoke(result)
+                        try:
+                            result = agent.invoke(result)
+                        except Exception as e:
+                            logger.error(f"Error re-invoking agent: {e}", exc_info=True)
+                            # Add error message to conversation
+                            result['messages'].append(AIMessage(
+                                content="I received the tool results but encountered an error processing them. "
+                                        "Please try your request again."
+                            ))
                 else:
                     logger.warning("No tool responses received within timeout")
                     # Add a message indicating tools are processing
@@ -526,9 +599,38 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Error processing request: {e}", exc_info=True)
+
+        # Determine appropriate status code and message based on error type
+        error_message = str(e)
+        status_code = 500
+
+        # Check if it's a throttling/rate limit error
+        if "ThrottlingException" in error_message or "TooManyRequests" in error_message:
+            status_code = 429
+            error_message = (
+                "The service is experiencing high traffic. "
+                "Please wait a moment and try again."
+            )
+        elif "Rate limit" in error_message:
+            status_code = 429
+            error_message = (
+                "Too many requests. Please wait a moment before trying again."
+            )
+        elif "timeout" in error_message.lower():
+            status_code = 504
+            error_message = "Request timed out. Please try again."
+
         return {
-            "statusCode": 500,
-            "body": json.dumps({"error": str(e)})
+            "statusCode": status_code,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+                "Retry-After": "60" if status_code == 429 else None,
+            },
+            "body": json.dumps({
+                "error": error_message,
+                "details": str(e) if status_code == 500 else None
+            })
         }
 
 

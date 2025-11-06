@@ -11,6 +11,7 @@ import (
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
+	"github.com/jrzesz33/rez_agent/internal/logging"
 	"github.com/jrzesz33/rez_agent/internal/mcp/server"
 	"github.com/jrzesz33/rez_agent/internal/mcp/tools"
 	"github.com/jrzesz33/rez_agent/internal/secrets"
@@ -25,7 +26,7 @@ type Handler struct {
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logging.GetLogLevel(),
 	}))
 
 	logger.Info("MCP Lambda Function Starting...")

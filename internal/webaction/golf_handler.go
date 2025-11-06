@@ -41,8 +41,8 @@ func (h *GolfHandler) GetActionType() models.WebActionType {
 
 // Execute fetches golf reservations and formats notification
 func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
-	h.logger.Debug("executing golf action",
-		slog.String("url", payload.URL),
+	h.logger.Debug("executing golf action:",
+		slog.Any("payload", payload),
 	)
 
 	// Validate authentication configuration

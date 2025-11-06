@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
+	"github.com/jrzesz33/rez_agent/internal/logging"
 	"github.com/jrzesz33/rez_agent/internal/messaging"
 	"github.com/jrzesz33/rez_agent/internal/models"
 	"github.com/jrzesz33/rez_agent/internal/repository"
@@ -36,7 +37,7 @@ type Handler struct {
 func main() {
 	// Initialize structured logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logging.GetLogLevel(),
 	}))
 
 	logger.Info("Web Action Function Starting...")

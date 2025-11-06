@@ -81,11 +81,11 @@ func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]inte
 		return nil, fmt.Errorf("failed to get token URL: %w", err)
 	}
 
-	jwksURL, err := course.GetActionURL("jwks-url")
+	/*jwksURL, err := course.GetActionURL("jwks-url")
 	if err != nil {
 		// JWKS URL is optional
 		jwksURL = ""
-	}
+	}*/
 
 	secretName := course.GetSecretName(t.stage)
 
@@ -96,26 +96,50 @@ func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]inte
 
 	// Create web action payload
 	payload := &models.WebActionPayload{
-		Action: models.WebActionTypeGolf,
-		URL:    apiURL,
+		Version: "1.0",
+		Action:  models.WebActionTypeGolf,
+		URL:     apiURL,
 		AuthConfig: &models.AuthConfig{
 			Type:       models.AuthTypeOAuthPassword,
 			TokenURL:   tokenURL,
 			SecretName: secretName,
-			Scope:      "openid profile email",
-			JWKSURL:    jwksURL,
+			//Scope:      "openid profile email",
+			//JWKSURL:    jwksURL,
 		},
 		Arguments: map[string]interface{}{
 			"operation": "fetch_reservations",
 		},
 	}
+	/*
+		// serialize payload for logging
+		t.logger.Info("constructed web action payload", slog.Any("payload", payload))
+		payloadStr, err := payload.ToJSONString()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize web action payload: %w", err)
+		}
+		// create mcp message for sns queue
+		message := models.NewMessage("mcp", models.Stage(t.stage), models.MessageTypeWebAction, payloadStr)
+
+		// Mark as queued
+		message.MarkQueued()
+
+		// Publish to SNS
+		err = t.publisher.PublishMessage(ctx, message)
+		if err != nil {
+			t.logger.ErrorContext(ctx, "failed to publish message", slog.String("error", err.Error()))
+			return nil, err
+		}
+
+
+			CLAUDE I WOULD LIKE TO MAKE THIS A ASYNCH PROCESS
+			RETURN A STATUS
+	*/
 
 	// Execute golf handler
 	results, err := t.golfHandler.Execute(ctx, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch reservations: %w", err)
 	}
-
 	// Convert results to content
 	var content []protocol.Content
 	for _, result := range results {
@@ -244,11 +268,11 @@ func (t *GolfSearchTeeTimesTool) Execute(ctx context.Context, args map[string]in
 			JWKSURL:    jwksURL,
 		},
 		Arguments: map[string]interface{}{
-			"operation":  "search_tee_times",
-			"start_time": startTime,
-			"end_time":   endTime,
+			"operation":   "search_tee_times",
+			"start_time":  startTime,
+			"end_time":    endTime,
 			"num_players": numPlayers,
-			"auto_book":  autoBook,
+			"auto_book":   autoBook,
 		},
 	}
 

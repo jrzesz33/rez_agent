@@ -108,6 +108,16 @@ var AllowedHosts = map[string]bool{
 	"birdsfoot.cps.golf": true,
 }
 
+func (p *WebActionPayload) ToJSONString() (string, error) {
+	// Serialize web action to JSON
+	webActionJSON, err := json.Marshal(p)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize web action... %v", err)
+	}
+	return string(webActionJSON), nil
+
+}
+
 // Validate performs comprehensive validation of the payload including SSRF prevention
 func (p *WebActionPayload) Validate() error {
 	// Validate version
@@ -204,11 +214,11 @@ func isPrivateIP(ip net.IP) bool {
 		"10.0.0.0/8",
 		"172.16.0.0/12",
 		"192.168.0.0/16",
-		"127.0.0.0/8",     // Loopback
-		"169.254.0.0/16",  // Link-local
-		"fc00::/7",        // IPv6 unique local
-		"fe80::/10",       // IPv6 link-local
-		"::1/128",         // IPv6 loopback
+		"127.0.0.0/8",    // Loopback
+		"169.254.0.0/16", // Link-local
+		"fc00::/7",       // IPv6 unique local
+		"fe80::/10",      // IPv6 link-local
+		"::1/128",        // IPv6 loopback
 	}
 
 	for _, rangeStr := range privateRanges {
@@ -396,9 +406,9 @@ func (p *WebActionPayload) RedactSensitiveData() *WebActionPayload {
 			for k, v := range redactedAuth.Headers {
 				lowerKey := strings.ToLower(k)
 				if strings.Contains(lowerKey, "auth") ||
-				   strings.Contains(lowerKey, "token") ||
-				   strings.Contains(lowerKey, "key") ||
-				   strings.Contains(lowerKey, "secret") {
+					strings.Contains(lowerKey, "token") ||
+					strings.Contains(lowerKey, "key") ||
+					strings.Contains(lowerKey, "secret") {
 					redactedHeaders[k] = "[REDACTED]"
 				} else {
 					redactedHeaders[k] = v

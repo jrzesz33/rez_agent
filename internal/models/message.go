@@ -1,6 +1,9 @@
 package models
 
 import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
 	"time"
 )
 
@@ -76,12 +79,14 @@ const (
 	MessageTypeScheduled MessageType = "scheduled"
 	// MessageTypeWebAction is a web action request (HTTP REST API call)
 	MessageTypeWebAction MessageType = "web_action"
+	// MessageTypeScheduleCreation is a schedule creation/management request
+	MessageTypeScheduleCreation MessageType = "schedule_creation"
 )
 
 // IsValid checks if the message type value is valid
 func (mt MessageType) IsValid() bool {
 	switch mt {
-	case MessageTypeHelloWorld, MessageTypeNotification, MessageTypeScheduled, MessageTypeWebAction, MessageTypeAgentResponse:
+	case MessageTypeHelloWorld, MessageTypeNotification, MessageTypeScheduled, MessageTypeWebAction, MessageTypeAgentResponse, MessageTypeScheduleCreation:
 		return true
 	default:
 		return false
@@ -95,6 +100,9 @@ func (mt MessageType) String() string {
 
 // Message represents a message in the system with metadata and payload
 type Message struct {
+	// Version of the message schema
+	Version string `json:"version" dynamodbav:"version"`
+
 	// ID is the unique identifier for the message
 	ID string `json:"id" dynamodbav:"id"`
 
@@ -116,6 +124,9 @@ type Message struct {
 	// Payload is the message content
 	Payload string `json:"payload" dynamodbav:"payload"`
 
+	// Arguments contains additional parameters for the message
+	Arguments map[string]interface{} `json:"arguments,omitempty" dynamodbav:"arguments,omitempty"`
+
 	// UpdatedDate is when the message was last updated
 	UpdatedDate time.Time `json:"updated_date,omitempty" dynamodbav:"updated_date,omitempty"`
 
@@ -127,9 +138,10 @@ type Message struct {
 }
 
 // NewMessage creates a new message with default values
-func NewMessage(createdBy string, stage Stage, messageType MessageType, payload string) *Message {
+func NewMessage(createdBy string, arguments map[string]interface{}, version string, stage Stage, messageType MessageType, payload string) *Message {
 	now := time.Now().UTC()
 	return &Message{
+		Version:     version,
 		ID:          generateMessageID(now),
 		CreatedDate: now,
 		CreatedBy:   createdBy,
@@ -137,9 +149,51 @@ func NewMessage(createdBy string, stage Stage, messageType MessageType, payload 
 		MessageType: messageType,
 		Status:      StatusCreated,
 		Payload:     payload,
+		Arguments:   arguments,
 		UpdatedDate: now,
 		RetryCount:  0,
 	}
+}
+func (m *Message) Validated(createdBy string) bool {
+	now := time.Now().UTC()
+	//Claude write some validation logic here e.g. Version must be here and also based on the message Type e.g. web action has to have action field
+	if !m.MessageType.IsValid() {
+		return false
+	}
+
+	m.ID = generateMessageID(now)
+	m.CreatedDate = now
+	m.CreatedBy = createdBy
+	m.Status = StatusCreated
+	m.UpdatedDate = now
+	m.RetryCount = 0
+
+	switch m.MessageType {
+	case MessageTypeWebAction:
+		webActionPayload := &WebActionPayload{
+			Version:    m.Version,
+			URL:        m.Arguments["url"].(string),
+			Action:     m.Arguments["action"].(WebActionType),
+			Arguments:  m.Arguments,
+			AuthConfig: m.AuthConfig,
+		}
+
+		// Serialize web action to JSON
+		webActionJSON, err := json.Marshal(webActionPayload)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "failed to serialize web action", slog.String("error", err.Error()))
+			return h.createErrorResponse(http.StatusInternalServerError, "failed to serialize web action"), err
+		}
+		payloadStr = string(webActionJSON)
+	case MessageTypeScheduleCreation:
+		// For these message types, ensure that the payload is not empty
+		if m.Payload == "" {
+			return false
+		}
+		// Additional validation can be added here as needed
+	}
+
+	return true
 }
 
 // generateMessageID generates a unique message ID based on timestamp and random component

@@ -72,7 +72,7 @@ func main() {
 	logger.Info("Initialized Repositories")
 
 	// Initialize SNS publisher
-	snsPublisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, cfg.AgentResponseTopicArn, logger)
+	snsPublisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, cfg.AgentResponseTopicArn, cfg.ScheduleCreationTopicArn, logger)
 
 	// Initialize SQS processor
 	sqsProcessor := messaging.NewSQSBatchProcessor(logger)

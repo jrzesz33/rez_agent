@@ -155,8 +155,11 @@ def create_agent_graph():
         """Main agent reasoning node"""
         logger.info(f"Agent node processing with {len(state.messages)} messages")
 
-        # Create system message with context
-        system_msg = SystemMessage(content=f"""You are a helpful golf reservation assistant.
+        # Only add system message if this is the first invocation (no messages yet)
+        # or if the first message is not a SystemMessage
+        messages = state.messages
+        if not messages or not isinstance(messages[0], SystemMessage):
+            system_msg = SystemMessage(content=f"""You are a helpful golf reservation assistant.
 Current date and time: {state.current_time}
 
 Available Golf Courses:
@@ -172,9 +175,15 @@ You can help users with:
 Always be friendly, clear, and confirm actions with users before booking.
 When searching for tee times, ask for the date, time range, and number of players if not provided.
 """)
+            messages = [system_msg] + messages
+            logger.info("Added system message (first invocation)")
+        else:
+            logger.info("System message already present, reusing existing messages")
+
+        # Debug: Log message structure for troubleshooting
+        logger.info(f"Message sequence before LLM invocation: {[type(msg).__name__ for msg in messages]}")
 
         # Invoke LLM with tools (with rate limiting and retry logic)
-        messages = [system_msg] + state.messages
 
         # Acquire rate limit token before making request
         if not rate_limiter.acquire(timeout=30.0):
@@ -192,17 +201,25 @@ When searching for tee times, ask for the date, time range, and number of player
 
         try:
             response = invoke_llm()
+            logger.info(f"Invoking LLM with :{messages}")
         except Exception as e:
             logger.error(f"Error invoking LLM after retries: {e}", exc_info=True)
+            logger.info(e)
             # Create a user-friendly error response
             error_msg = (
-                "I'm experiencing high traffic right now. "
-                "Please try again in a few moments."
+                "I'm experiencing an issue right now. "
+                "Please try again later."
             )
             response = AIMessage(content=error_msg)
 
+        # Update state with the new messages list (including system message if it was added)
+        # This ensures the system message persists across tool invocations
+        state.messages = messages
+
         # Add response to messages
         state.messages.append(response)
+
+        logger.info(f"Agent node complete, message count: {len(state.messages)}")
         return state
 
     # Define custom tool node for Bedrock Converse API compatibility
@@ -211,9 +228,11 @@ When searching for tee times, ask for the date, time range, and number of player
         last_message = state.messages[-1]
 
         if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
+            logger.info("No tool calls to execute")
             return state
 
         logger.info(f"Executing {len(last_message.tool_calls)} tool calls")
+        logger.info(f"Message count before tool execution: {len(state.messages)}")
 
         # Create a mapping of tool names to tool functions
         tools_by_name = {tool.name: tool for tool in tools}
@@ -259,6 +278,8 @@ When searching for tee times, ask for the date, time range, and number of player
                 )
                 state.messages.append(tool_message)
 
+        logger.info(f"Tool execution complete, message count: {len(state.messages)}")
+        logger.info(f"Message sequence after tool execution: {[type(msg).__name__ for msg in state.messages[-5:]]}")
         return state
 
     # Should continue to tools or end?

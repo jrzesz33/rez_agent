@@ -18,11 +18,16 @@ type Config struct {
 	// DynamoDB Configuration
 	DynamoDBTableName         string
 	WebActionResultsTableName string
+	SchedulesTableName        string // Table for dynamic schedules
 
 	// SNS Configuration
-	WebActionsSNSTopicArn    string // Topic for web action messages
-	NotificationsSNSTopicArn string // Topic for notification messages
-	AgentResponseTopicArn    string // Topic for agent response messages
+	WebActionsSNSTopicArn      string // Topic for web action messages
+	NotificationsSNSTopicArn   string // Topic for notification messages
+	AgentResponseTopicArn      string // Topic for agent response messages
+	ScheduleCreationTopicArn   string // Topic for schedule creation requests
+
+	// EventBridge Scheduler Configuration
+	EventBridgeExecutionRoleArn string // Role ARN for EventBridge Scheduler to invoke Lambda
 
 	// SQS Configuration
 	NotificationSQSQueueURL string
@@ -65,10 +70,19 @@ func Load() (*Config, error) {
 		webActionResultsTableName = fmt.Sprintf("rez-agent-web-action-results-%s", stage)
 	}
 
+	schedulesTableName := os.Getenv("SCHEDULES_TABLE_NAME")
+	if schedulesTableName == "" {
+		schedulesTableName = fmt.Sprintf("rez-agent-schedules-%s", stage)
+	}
+
 	// Topic-based routing (for webapi Lambda)
 	webActionsSNSTopicArn := os.Getenv("WEB_ACTIONS_TOPIC_ARN")
 	notificationsSNSTopicArn := os.Getenv("NOTIFICATIONS_TOPIC_ARN")
 	agentResponseTopicArn := os.Getenv("AGENT_RESPONSE_TOPIC_ARN")
+	scheduleCreationTopicArn := os.Getenv("SCHEDULE_CREATION_TOPIC_ARN")
+
+	// EventBridge Scheduler execution role
+	eventBridgeExecutionRoleArn := os.Getenv("EVENTBRIDGE_EXECUTION_ROLE_ARN")
 
 	notificationSqsQueueURL := os.Getenv("NOTIFICATION_SQS_QUEUE_URL")
 	if notificationSqsQueueURL == "" {
@@ -89,17 +103,21 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Stage:                     stageEnum,
-		AWSRegion:                 awsRegion,
-		DynamoDBTableName:         dynamoDBTableName,
-		WebActionResultsTableName: webActionResultsTableName,
-		WebActionsSNSTopicArn:     webActionsSNSTopicArn,
-		NotificationsSNSTopicArn:  notificationsSNSTopicArn,
-		AgentResponseTopicArn:     agentResponseTopicArn,
-		WebActionSQSQueueURL:      webActionSQSQueueURL,
-		NtfyURL:                   ntfyURL,
-		GolfSecretName:            golfSecretName,
-		LambdaTimeout:             30,
+		Stage:                       stageEnum,
+		AWSRegion:                   awsRegion,
+		DynamoDBTableName:           dynamoDBTableName,
+		WebActionResultsTableName:   webActionResultsTableName,
+		SchedulesTableName:          schedulesTableName,
+		WebActionsSNSTopicArn:       webActionsSNSTopicArn,
+		NotificationsSNSTopicArn:    notificationsSNSTopicArn,
+		AgentResponseTopicArn:       agentResponseTopicArn,
+		ScheduleCreationTopicArn:    scheduleCreationTopicArn,
+		EventBridgeExecutionRoleArn: eventBridgeExecutionRoleArn,
+		NotificationSQSQueueURL:     notificationSqsQueueURL,
+		WebActionSQSQueueURL:        webActionSQSQueueURL,
+		NtfyURL:                     ntfyURL,
+		GolfSecretName:              golfSecretName,
+		LambdaTimeout:               30,
 	}, nil
 }
 

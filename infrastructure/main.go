@@ -193,6 +193,54 @@ func main() {
 		}
 
 		// ========================================
+		// DynamoDB Table for Schedules
+		// ========================================
+		schedulesTable, err := dynamodb.NewTable(ctx, fmt.Sprintf("rez-agent-schedules-%s", stage), &dynamodb.TableArgs{
+			Name:        pulumi.String(fmt.Sprintf("rez-agent-schedules-%s", stage)),
+			BillingMode: pulumi.String("PAY_PER_REQUEST"),
+			HashKey:     pulumi.String("id"),
+			Attributes: dynamodb.TableAttributeArray{
+				&dynamodb.TableAttributeArgs{
+					Name: pulumi.String("id"),
+					Type: pulumi.String("S"),
+				},
+				&dynamodb.TableAttributeArgs{
+					Name: pulumi.String("status"),
+					Type: pulumi.String("S"),
+				},
+				&dynamodb.TableAttributeArgs{
+					Name: pulumi.String("created_date"),
+					Type: pulumi.String("S"),
+				},
+				&dynamodb.TableAttributeArgs{
+					Name: pulumi.String("created_by"),
+					Type: pulumi.String("S"),
+				},
+			},
+			GlobalSecondaryIndexes: dynamodb.TableGlobalSecondaryIndexArray{
+				&dynamodb.TableGlobalSecondaryIndexArgs{
+					Name:           pulumi.String("status-created_date-index"),
+					HashKey:        pulumi.String("status"),
+					RangeKey:       pulumi.String("created_date"),
+					ProjectionType: pulumi.String("ALL"),
+				},
+				&dynamodb.TableGlobalSecondaryIndexArgs{
+					Name:           pulumi.String("created_by-index"),
+					HashKey:        pulumi.String("created_by"),
+					ProjectionType: pulumi.String("ALL"),
+				},
+			},
+			Ttl: &dynamodb.TableTtlArgs{
+				AttributeName: pulumi.String("ttl"),
+				Enabled:       pulumi.Bool(true),
+			},
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// ========================================
 		// SNS Topics (Topic-based routing)
 		// ========================================
 
@@ -217,6 +265,15 @@ func main() {
 		// Agent Response Topic (for receiving tool results)
 		agentResponseTopic, err := sns.NewTopic(ctx, fmt.Sprintf("rez-agent-agent-responses-%s", stage), &sns.TopicArgs{
 			Name: pulumi.String(fmt.Sprintf("rez-agent-agent-responses-%s", stage)),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Schedule Creation Topic (for dynamically creating EventBridge Schedules)
+		scheduleCreationTopic, err := sns.NewTopic(ctx, fmt.Sprintf("rez-agent-schedule-creation-%s", stage), &sns.TopicArgs{
+			Name: pulumi.String(fmt.Sprintf("rez-agent-schedule-creation-%s", stage)),
 			Tags: commonTags,
 		})
 		if err != nil {
@@ -332,6 +389,7 @@ func main() {
 		if err != nil {
 			return err
 		}
+
 		// ========================================
 		// SQS Queue Policies
 		// ========================================
@@ -445,9 +503,16 @@ func main() {
 		// Scheduler Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-scheduler-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: schedulerRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
-				tableArn := args[0].(string)
-				topicArn := args[1].(string)
+			Policy: pulumi.All(
+				messagesTable.Arn,
+				schedulesTable.Arn,
+				notificationsTopic.Arn,
+				webActionsTopic.Arn,
+			).ApplyT(func(args []interface{}) string {
+				messagesTableArn := args[0].(string)
+				schedulesTableArn := args[1].(string)
+				notificationsTopicArn := args[2].(string)
+				webActionsTopicArn := args[3].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -455,14 +520,31 @@ func main() {
 							"Effect": "Allow",
 							"Action": [
 								"dynamodb:PutItem",
-								"dynamodb:UpdateItem"
+								"dynamodb:UpdateItem",
+								"dynamodb:GetItem",
+								"dynamodb:Query"
 							],
-							"Resource": "%s"
+							"Resource": ["%s", "%s/*", "%s", "%s/*"]
 						},
 						{
 							"Effect": "Allow",
 							"Action": ["sns:Publish"],
-							"Resource": "%s"
+							"Resource": ["%s", "%s"]
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"scheduler:CreateSchedule",
+								"scheduler:GetSchedule",
+								"scheduler:UpdateSchedule",
+								"scheduler:DeleteSchedule"
+							],
+							"Resource": "arn:aws:scheduler:*:*:schedule/default/*"
+						},
+						{
+							"Effect": "Allow",
+							"Action": ["iam:PassRole"],
+							"Resource": "arn:aws:iam::*:role/rez-agent-eventbridge-scheduler-execution-role-%s"
 						},
 						{
 							"Effect": "Allow",
@@ -482,8 +564,45 @@ func main() {
 							"Resource": "*"
 						}
 					]
-				}`, tableArn, topicArn)
+				}`, messagesTableArn, messagesTableArn, schedulesTableArn, schedulesTableArn,
+					notificationsTopicArn, webActionsTopicArn, stage)
 			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
+		// EventBridge Scheduler Execution Role (for dynamically created schedules)
+		// This role is passed to EventBridge Scheduler to invoke the scheduler Lambda
+		eventBridgeSchedulerExecutionRole, err := iam.NewRole(ctx, fmt.Sprintf("rez-agent-eventbridge-scheduler-execution-role-%s", stage), &iam.RoleArgs{
+			Name: pulumi.String(fmt.Sprintf("rez-agent-eventbridge-scheduler-execution-role-%s", stage)),
+			AssumeRolePolicy: pulumi.String(`{
+				"Version": "2012-10-17",
+				"Statement": [{
+					"Effect": "Allow",
+					"Principal": {"Service": "scheduler.amazonaws.com"},
+					"Action": "sts:AssumeRole"
+				}]
+			}`),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// EventBridge Scheduler Execution Role Policy
+		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-eventbridge-scheduler-execution-policy-%s", stage), &iam.RolePolicyArgs{
+			Role: eventBridgeSchedulerExecutionRole.Name,
+			Policy: pulumi.String(`{
+				"Version": "2012-10-17",
+				"Statement": [
+					{
+						"Effect": "Allow",
+						"Action": ["lambda:InvokeFunction"],
+						"Resource": "arn:aws:lambda:*:*:function:rez-agent-scheduler-*"
+					}
+				]
+			}`),
 		})
 		if err != nil {
 			return err
@@ -586,10 +705,18 @@ func main() {
 		// WebAPI Lambda Policy
 		_, err = iam.NewRolePolicy(ctx, fmt.Sprintf("rez-agent-webapi-policy-%s", stage), &iam.RolePolicyArgs{
 			Role: webapiRole.Name,
-			Policy: pulumi.All(messagesTable.Arn, webActionsTopic.Arn, notificationsTopic.Arn).ApplyT(func(args []interface{}) string {
-				tableArn := args[0].(string)
-				webActionsTopicArn := args[1].(string)
-				notificationsTopicArn := args[2].(string)
+			Policy: pulumi.All(
+				messagesTable.Arn,
+				schedulesTable.Arn,
+				webActionsTopic.Arn,
+				notificationsTopic.Arn,
+				scheduleCreationTopic.Arn,
+			).ApplyT(func(args []interface{}) string {
+				messagesTableArn := args[0].(string)
+				schedulesTableArn := args[1].(string)
+				webActionsTopicArn := args[2].(string)
+				notificationsTopicArn := args[3].(string)
+				scheduleCreationTopicArn := args[4].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -601,12 +728,12 @@ func main() {
 								"dynamodb:PutItem",
 								"dynamodb:UpdateItem"
 							],
-							"Resource": ["%s", "%s/*"]
+							"Resource": ["%s", "%s/*", "%s", "%s/*"]
 						},
 						{
 							"Effect": "Allow",
 							"Action": ["sns:Publish"],
-							"Resource": ["%s", "%s"]
+							"Resource": ["%s", "%s", "%s"]
 						},
 						{
 							"Effect": "Allow",
@@ -626,7 +753,8 @@ func main() {
 							"Resource": "*"
 						}
 					]
-				}`, tableArn, tableArn, webActionsTopicArn, notificationsTopicArn)
+				}`, messagesTableArn, messagesTableArn, schedulesTableArn, schedulesTableArn,
+					webActionsTopicArn, notificationsTopicArn, scheduleCreationTopicArn)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -676,12 +804,15 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/scheduler.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
-					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
-					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
-					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
-					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
-					"STAGE":                      pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME":            messagesTable.Name,
+					"SCHEDULES_TABLE_NAME":           schedulesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":          webActionsTopic.Arn,    // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":        notificationsTopic.Arn, // Topic-based routing
+					"SCHEDULE_CREATION_TOPIC_ARN":    scheduleCreationTopic.Arn,
+					"WEB_ACTION_SQS_QUEUE_URL":       webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL":     notificationsQueue.Url,
+					"EVENTBRIDGE_EXECUTION_ROLE_ARN": eventBridgeSchedulerExecutionRole.Arn,
+					"STAGE":                          pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -745,12 +876,15 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/webapi.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
-					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
-					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
-					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
-					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
-					"STAGE":                      pulumi.String(stage),
+					"DYNAMODB_TABLE_NAME":         messagesTable.Name,
+					"SCHEDULES_TABLE_NAME":        schedulesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":       webActionsTopic.Arn,       // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":     notificationsTopic.Arn,    // Topic-based routing
+					"AGENT_RESPONSE_TOPIC_ARN":    agentResponseTopic.Arn,    // Topic-based routing
+					"SCHEDULE_CREATION_TOPIC_ARN": scheduleCreationTopic.Arn, // Schedule management
+					"WEB_ACTION_SQS_QUEUE_URL":    webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL":  notificationsQueue.Url,
+					"STAGE":                       pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -882,14 +1016,15 @@ func main() {
 			Code:    pulumi.NewFileArchive("../build/webaction.zip"),
 			Environment: &lambda.FunctionEnvironmentArgs{
 				Variables: pulumi.StringMap{
-					"DYNAMODB_TABLE_NAME":        messagesTable.Name,
-					"WEB_ACTIONS_TOPIC_ARN":      webActionsTopic.Arn,    // Topic-based routing
-					"NOTIFICATIONS_TOPIC_ARN":    notificationsTopic.Arn, // Topic-based routing
-					"WEB_ACTION_SQS_QUEUE_URL":   webActionsQueue.Url,
-					"NOTIFICATION_SQS_QUEUE_URL": notificationsQueue.Url,
-					"AGENT_RESPONSE_TOPIC_ARN":   agentResponseTopic.Arn, // Now available
-					"STAGE":                      pulumi.String(stage),
-					"GOLF_SECRET_NAME":           pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
+					"DYNAMODB_TABLE_NAME":         messagesTable.Name,
+					"WEB_ACTIONS_TOPIC_ARN":       webActionsTopic.Arn,    // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":     notificationsTopic.Arn, // Topic-based routing
+					"WEB_ACTION_SQS_QUEUE_URL":    webActionsQueue.Url,
+					"NOTIFICATION_SQS_QUEUE_URL":  notificationsQueue.Url,
+					"AGENT_RESPONSE_TOPIC_ARN":    agentResponseTopic.Arn,    // Now available
+					"SCHEDULE_CREATION_TOPIC_ARN": scheduleCreationTopic.Arn, // Schedule management
+					"STAGE":                       pulumi.String(stage),
+					"GOLF_SECRET_NAME":            pulumi.String(fmt.Sprintf("rez-agent/golf/credentials-%s", stage)),
 				},
 			},
 			MemorySize: pulumi.Int(512),
@@ -985,6 +1120,27 @@ func main() {
 		// ========================================
 		// EventBridge Scheduler
 		// ========================================
+
+		// Schedule Creation Topic -> Scheduler Lambda
+		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-schedule-creation-subscription-%s", stage), &sns.TopicSubscriptionArgs{
+			Topic:    scheduleCreationTopic.Arn,
+			Protocol: pulumi.String("lambda"),
+			Endpoint: schedulerLambda.Arn,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Allow SNS to invoke Scheduler Lambda
+		_, err = lambda.NewPermission(ctx, fmt.Sprintf("rez-agent-scheduler-sns-permission-%s", stage), &lambda.PermissionArgs{
+			Action:    pulumi.String("lambda:InvokeFunction"),
+			Function:  schedulerLambda.Name,
+			Principal: pulumi.String("sns.amazonaws.com"),
+			SourceArn: scheduleCreationTopic.Arn,
+		})
+		if err != nil {
+			return err
+		}
 
 		// EventBridge Scheduler Role
 		schedulerExecutionRole, err := iam.NewRole(ctx, fmt.Sprintf("rez-agent-eventbridge-scheduler-role-%s", stage), &iam.RoleArgs{
@@ -1529,6 +1685,12 @@ func main() {
 		ctx.Export("apiGatewayId", httpApi.ID())
 		ctx.Export("apiGatewayEndpoint", httpApi.ApiEndpoint)
 		ctx.Export("webapiUrl", httpApi.ApiEndpoint)
+
+		// Schedule-related exports
+		ctx.Export("schedulesTableName", schedulesTable.Name)
+		ctx.Export("schedulesTableArn", schedulesTable.Arn)
+		ctx.Export("scheduleCreationTopicArn", scheduleCreationTopic.Arn)
+		ctx.Export("eventBridgeSchedulerExecutionRoleArn", eventBridgeSchedulerExecutionRole.Arn)
 
 		return nil
 	})

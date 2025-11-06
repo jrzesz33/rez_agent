@@ -24,24 +24,27 @@ import (
 
 // WebAPIHandler handles API Gateway requests
 type WebAPIHandler struct {
-	config     *appconfig.Config
-	repository repository.MessageRepository
-	publisher  messaging.SNSPublisher
-	logger     *slog.Logger
+	config             *appconfig.Config
+	repository         repository.MessageRepository
+	scheduleRepository repository.ScheduleRepository
+	publisher          messaging.SNSPublisher
+	logger             *slog.Logger
 }
 
 // NewWebAPIHandler creates a new web API handler instance
 func NewWebAPIHandler(
 	cfg *appconfig.Config,
 	repo repository.MessageRepository,
+	scheduleRepo repository.ScheduleRepository,
 	pub messaging.SNSPublisher,
 	logger *slog.Logger,
 ) *WebAPIHandler {
 	return &WebAPIHandler{
-		config:     cfg,
-		repository: repo,
-		publisher:  pub,
-		logger:     logger,
+		config:             cfg,
+		repository:         repo,
+		scheduleRepository: scheduleRepo,
+		publisher:          pub,
+		logger:             logger,
 	}
 }
 
@@ -85,6 +88,8 @@ func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGat
 		response, err = h.handleListMessages(ctx, request)
 	case path == "/api/messages" && method == "POST":
 		response, err = h.handleCreateMessage(ctx, request)
+	case path == "/api/schedules" && method == "POST":
+		response, err = h.handleCreateSchedule(ctx, request)
 	case path == "/api/metrics" && method == "GET":
 		response, err = h.handleMetrics(ctx)
 	default:
@@ -184,72 +189,34 @@ func (h *WebAPIHandler) handleListMessages(ctx context.Context, request events.A
 	}, nil
 }
 
-// CreateMessageRequest represents a request to create a new message
-// For simple notification messages, use the "payload" field.
-// For web action messages, embed the WebActionPayload fields directly at the root level.
-type CreateMessageRequest struct {
-	// Simple message fields
-	Payload     string             `json:"payload,omitempty"`
-	MessageType models.MessageType `json:"message_type,omitempty"`
-	Stage       models.Stage       `json:"stage,omitempty"`
-
-	// Web action fields (embedded from WebActionPayload)
-	Version    string                 `json:"version,omitempty"`
-	URL        string                 `json:"url,omitempty"`
-	Action     models.WebActionType   `json:"action,omitempty"`
-	Arguments  map[string]interface{} `json:"arguments,omitempty"`
-	AuthConfig *models.AuthConfig     `json:"auth_config,omitempty"`
-}
-
 // handleCreateMessage creates a new message manually
 func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	var req CreateMessageRequest
+	var req models.Message
 	err := json.Unmarshal([]byte(request.Body), &req)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "failed to parse request body", slog.String("error", err.Error()))
 		return h.createErrorResponse(http.StatusBadRequest, "invalid request body"), err
 	}
-
-	// Detect if this is a web action request (has version, url, action fields)
-	isWebAction := req.Version != "" || req.URL != "" || req.Action != ""
-
-	// Validate request - either payload or web action fields must be provided
-	if req.Payload == "" && !isWebAction {
-		return h.createErrorResponse(http.StatusBadRequest, "either payload or web action fields (version, url, action) are required"), nil
-	}
-
-	if req.Payload != "" && isWebAction {
-		return h.createErrorResponse(http.StatusBadRequest, "cannot specify both payload and web action fields"), nil
-	}
-
 	// Use config stage if not provided
-	stage := req.Stage
-	if stage == "" {
-		stage = h.config.Stage
+	if req.Stage == "" {
+		req.Stage = h.config.Stage
 	}
+	req.Validated("webapi")
 
-	if !stage.IsValid() {
+	if !req.Stage.IsValid() {
 		return h.createErrorResponse(http.StatusBadRequest, "invalid stage value"), nil
 	}
 
 	// Determine message type
 	messageType := req.MessageType
 	if messageType == "" {
-		// Auto-detect message type based on request content
-		if isWebAction {
-			messageType = models.MessageTypeWebAction
-		} else {
-			messageType = models.MessageTypeNotification
-		}
-	}
-
-	if !messageType.IsValid() {
-		return h.createErrorResponse(http.StatusBadRequest, "invalid message_type value"), nil
+		messageType = models.MessageTypeNotification
 	}
 
 	// Prepare payload string
 	var payloadStr string
-	if isWebAction {
+	switch messageType {
+	case models.MessageTypeWebAction:
 		// Construct WebActionPayload from request fields
 		webActionPayload := &models.WebActionPayload{
 			Version:    req.Version,
@@ -259,14 +226,6 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 			AuthConfig: req.AuthConfig,
 		}
 
-		// Validate web action if message type is web_action
-		if messageType == models.MessageTypeWebAction {
-			if err := webActionPayload.Validate(); err != nil {
-				h.logger.ErrorContext(ctx, "invalid web action payload", slog.String("error", err.Error()))
-				return h.createErrorResponse(http.StatusBadRequest, fmt.Sprintf("invalid web action: %s", err.Error())), nil
-			}
-		}
-
 		// Serialize web action to JSON
 		webActionJSON, err := json.Marshal(webActionPayload)
 		if err != nil {
@@ -274,8 +233,14 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 			return h.createErrorResponse(http.StatusInternalServerError, "failed to serialize web action"), err
 		}
 		payloadStr = string(webActionJSON)
-	} else {
+	case models.MessageTypeNotification:
 		payloadStr = req.Payload
+	case models.MessageTypeScheduleCreation:
+		schedulePayload := models.NewSchedule(
+			req.Name, req.Arguments["schedule_expression"].(string),
+			req.Arguments["timezone"].(string), req.Arguments["target_type"].(string),
+		)
+		scheduleJSON, err := json.Marshal(schedulePayload)
 	}
 
 	// Create message
@@ -362,6 +327,79 @@ func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayV2H
 	}, nil
 }
 
+// handleCreateSchedule creates a new dynamic schedule
+func (h *WebAPIHandler) handleCreateSchedule(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	var scheduleDef models.ScheduleDefinition
+	err := json.Unmarshal([]byte(request.Body), &scheduleDef)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "failed to parse schedule request body", slog.String("error", err.Error()))
+		return h.createErrorResponse(http.StatusBadRequest, "invalid request body"), err
+	}
+
+	h.logger.InfoContext(ctx, "received schedule creation request",
+		slog.String("name", scheduleDef.Name),
+		slog.String("expression", scheduleDef.ScheduleExpression),
+		slog.String("target_type", scheduleDef.TargetType),
+	)
+
+	// Validate schedule definition
+	if err := scheduleDef.Validate(); err != nil {
+		h.logger.ErrorContext(ctx, "invalid schedule definition", slog.String("error", err.Error()))
+		return h.createErrorResponse(http.StatusBadRequest, fmt.Sprintf("invalid schedule: %s", err.Error())), nil
+	}
+
+	// Create schedule creation request
+	scheduleReq := models.ScheduleCreationRequest{
+		Action:   "create",
+		Schedule: scheduleDef,
+	}
+
+	// Publish to SNS schedule-creation topic
+	scheduleJSON, err := json.Marshal(scheduleReq)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "failed to marshal schedule request", slog.String("error", err.Error()))
+		return h.createErrorResponse(http.StatusInternalServerError, "failed to process schedule request"), err
+	}
+
+	// Create a temporary message for SNS publishing
+	// We use the schedule creation topic for schedule management
+	tempMessage := models.NewMessage("webapi", h.config.Stage, models.MessageTypeScheduleCreation, string(scheduleJSON))
+
+	// Publish to schedule creation topic
+	err = h.publisher.PublishMessage(ctx, tempMessage)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "failed to publish schedule request", slog.String("error", err.Error()))
+		return h.createErrorResponse(http.StatusInternalServerError, "failed to publish schedule request"), err
+	}
+
+	// Return 202 Accepted response with schedule info
+	response := map[string]interface{}{
+		"status":  "accepted",
+		"message": "schedule creation request submitted",
+		"schedule": map[string]interface{}{
+			"name":                scheduleDef.Name,
+			"schedule_expression": scheduleDef.ScheduleExpression,
+			"timezone":            scheduleDef.Timezone,
+			"target_type":         scheduleDef.TargetType,
+			"description":         scheduleDef.Description,
+		},
+	}
+
+	body, err := json.Marshal(response)
+	if err != nil {
+		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal response"), err
+	}
+
+	h.logger.InfoContext(ctx, "schedule creation request accepted",
+		slog.String("name", scheduleDef.Name),
+	)
+
+	return events.APIGatewayV2HTTPResponse{
+		StatusCode: http.StatusAccepted,
+		Body:       string(body),
+	}, nil
+}
+
 // createErrorResponse creates a standardized error response
 func (h *WebAPIHandler) createErrorResponse(statusCode int, message string) events.APIGatewayV2HTTPResponse {
 	errorBody := map[string]string{
@@ -404,8 +442,9 @@ func main() {
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	snsClient := sns.NewFromConfig(awsCfg)
 
-	// Create repository and publisher
+	// Create repositories
 	repo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
+	scheduleRepo := repository.NewDynamoDBScheduleRepository(dynamoClient, cfg.SchedulesTableName)
 
 	// Use topic routing if both topics are configured, otherwise fall back to legacy single topic
 	publisher := messaging.NewTopicRoutingSNSClient(
@@ -413,15 +452,17 @@ func main() {
 		cfg.WebActionsSNSTopicArn,
 		cfg.NotificationsSNSTopicArn,
 		cfg.AgentResponseTopicArn,
+		cfg.ScheduleCreationTopicArn,
 		logger,
 	)
 	logger.Info("using topic-routing SNS client",
 		slog.String("web_actions_topic", cfg.WebActionsSNSTopicArn),
 		slog.String("notifications_topic", cfg.NotificationsSNSTopicArn),
+		slog.String("schedule_creation_topic", cfg.ScheduleCreationTopicArn),
 	)
 
 	// Create handler
-	handler := NewWebAPIHandler(cfg, repo, publisher, logger)
+	handler := NewWebAPIHandler(cfg, repo, scheduleRepo, publisher, logger)
 
 	// Start Lambda handler
 	lambda.Start(handler.HandleRequest)

@@ -1,0 +1,11 @@
+{
+    "name": "daily-tee-time-check",
+    "schedule_expression": "cron(0 6 * * ? *)",
+    "timezone": "America/New_York",
+    "target_type": "web_action",
+    "description": "Check for available tee times daily at 6 AM EST",
+    "payload": {
+        "action": "check_tee_times",
+        "course": "Birdsfoot Golf Course"
+    }
+}

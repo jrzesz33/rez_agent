@@ -35,12 +35,13 @@ func TestLoad(t *testing.T) {
 		{
 			name: "valid configuration with all env vars",
 			envVars: map[string]string{
-				"STAGE":               "dev",
-				"AWS_REGION":          "us-west-2",
-				"DYNAMODB_TABLE_NAME": "test-table",
-				"SNS_TOPIC_ARN":       "arn:aws:sns:us-west-2:123456789012:test-topic",
-				"SQS_QUEUE_URL":       "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
-				"NTFY_URL":            "https://ntfy.sh/test",
+				"STAGE":                      "dev",
+				"AWS_REGION":                 "us-west-2",
+				"DYNAMODB_TABLE_NAME":        "test-table",
+				"SNS_TOPIC_ARN":              "arn:aws:sns:us-west-2:123456789012:test-topic",
+				"SQS_QUEUE_URL":              "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
+				"NOTIFICATION_SQS_QUEUE_URL": "https://sqs.us-west-2.amazonaws.com/123456789012/notification-queue",
+				"NTFY_URL":                   "https://ntfy.sh/test",
 			},
 			wantErr: false,
 			checkFunc: func(t *testing.T, cfg *Config) {
@@ -58,8 +59,9 @@ func TestLoad(t *testing.T) {
 		{
 			name: "defaults when optional vars not set",
 			envVars: map[string]string{
-				"SNS_TOPIC_ARN": "arn:aws:sns:us-west-2:123456789012:test-topic",
-				"SQS_QUEUE_URL": "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
+				"SNS_TOPIC_ARN":              "arn:aws:sns:us-west-2:123456789012:test-topic",
+				"SQS_QUEUE_URL":              "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
+				"NOTIFICATION_SQS_QUEUE_URL": "https://sqs.us-west-2.amazonaws.com/123456789012/notification-queue",
 			},
 			wantErr: false,
 			checkFunc: func(t *testing.T, cfg *Config) {
@@ -80,23 +82,17 @@ func TestLoad(t *testing.T) {
 		{
 			name: "invalid stage value",
 			envVars: map[string]string{
-				"STAGE":         "invalid",
-				"SNS_TOPIC_ARN": "arn:aws:sns:us-west-2:123456789012:test-topic",
-				"SQS_QUEUE_URL": "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
+				"STAGE":                      "invalid",
+				"SNS_TOPIC_ARN":              "arn:aws:sns:us-west-2:123456789012:test-topic",
+				"SQS_QUEUE_URL":              "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
+				"NOTIFICATION_SQS_QUEUE_URL": "https://sqs.us-west-2.amazonaws.com/123456789012/notification-queue",
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing SNS_TOPIC_ARN",
+			name: "missing NOTIFICATION_SQS_QUEUE_URL",
 			envVars: map[string]string{
-				"SQS_QUEUE_URL": "https://sqs.us-west-2.amazonaws.com/123456789012/test-queue",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing SQS_QUEUE_URL",
-			envVars: map[string]string{
-				"SNS_TOPIC_ARN": "arn:aws:sns:us-west-2:123456789012:test-topic",
+				"STAGE": "dev",
 			},
 			wantErr: true,
 		},
@@ -110,6 +106,7 @@ func TestLoad(t *testing.T) {
 			os.Unsetenv("DYNAMODB_TABLE_NAME")
 			os.Unsetenv("SNS_TOPIC_ARN")
 			os.Unsetenv("SQS_QUEUE_URL")
+			os.Unsetenv("NOTIFICATION_SQS_QUEUE_URL")
 			os.Unsetenv("NTFY_URL")
 
 			// Set test env vars

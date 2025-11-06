@@ -40,25 +40,27 @@ func NewSNSClient(client *sns.Client, topicArn string, logger *slog.Logger) *SNS
 
 // TopicRoutingSNSClient implements SNSPublisher with message-type-based topic routing
 type TopicRoutingSNSClient struct {
-	client                *sns.Client
-	webActionsTopicArn    string
-	notificationsTopicArn string
-	agentResponseTopicArn string
-	logger                *slog.Logger
+	client                  *sns.Client
+	webActionsTopicArn      string
+	notificationsTopicArn   string
+	agentResponseTopicArn   string
+	scheduleCreationTopicArn string
+	logger                  *slog.Logger
 }
 
 // NewTopicRoutingSNSClient creates a new topic-routing SNS client
-func NewTopicRoutingSNSClient(client *sns.Client, webActionsTopicArn, notificationsTopicArn, agentResponseTopicArn string, logger *slog.Logger) *TopicRoutingSNSClient {
+func NewTopicRoutingSNSClient(client *sns.Client, webActionsTopicArn, notificationsTopicArn, agentResponseTopicArn, scheduleCreationTopicArn string, logger *slog.Logger) *TopicRoutingSNSClient {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	return &TopicRoutingSNSClient{
-		client:                client,
-		webActionsTopicArn:    webActionsTopicArn,
-		notificationsTopicArn: notificationsTopicArn,
-		agentResponseTopicArn: agentResponseTopicArn,
-		logger:                logger,
+		client:                  client,
+		webActionsTopicArn:      webActionsTopicArn,
+		notificationsTopicArn:   notificationsTopicArn,
+		agentResponseTopicArn:   agentResponseTopicArn,
+		scheduleCreationTopicArn: scheduleCreationTopicArn,
+		logger:                  logger,
 	}
 }
 
@@ -69,6 +71,8 @@ func (s *TopicRoutingSNSClient) getTopicForMessageType(messageType models.Messag
 		return s.webActionsTopicArn
 	case models.MessageTypeAgentResponse:
 		return s.agentResponseTopicArn
+	case models.MessageTypeScheduleCreation:
+		return s.scheduleCreationTopicArn
 	default:
 		// All other message types (scheduled, manual, hello_world) go to notifications topic
 		return s.notificationsTopicArn

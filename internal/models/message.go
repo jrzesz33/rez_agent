@@ -156,6 +156,12 @@ func NewMessage(createdBy string, arguments map[string]interface{}, version stri
 	}
 }
 func (m *Message) Validate() error {
+	m.ID = generateMessageID(time.Now().UTC())
+	m.CreatedDate = time.Now().UTC()
+	m.UpdatedDate = time.Now().UTC()
+	m.RetryCount = 0
+	m.CreatedBy = "webapi"
+	m.Status = StatusCreated
 	switch m.MessageType {
 	case MessageTypeWebAction:
 		_, err := ParseWebActionPayload(m.Payload)

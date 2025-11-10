@@ -192,7 +192,7 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 	var req models.Message
 	err := json.Unmarshal([]byte(request.Body), &req)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to parse request body", slog.String("error", err.Error()))
+		h.logger.ErrorContext(ctx, "failed to parse request body", slog.String("error", request.Body))
 		return h.createErrorResponse(http.StatusBadRequest, "invalid request body"), err
 	}
 	// Use config stage if not provided

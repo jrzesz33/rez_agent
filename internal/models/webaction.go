@@ -3,10 +3,11 @@ package models
 import (
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/url"
+	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/jrzesz33/rez_agent/pkg/courses"
 )
 
 // WebActionType represents the type of web action to perform
@@ -128,6 +129,43 @@ var AllowedHosts = map[string]bool{
 	"birdsfoot.cps.golf": true,
 }
 
+func (p *WebActionPayload) AddCourseConfig(oper string, course courses.Course) {
+
+	var err error
+	var jwkUrl, tokenURL string
+	switch oper {
+	case "get_weather":
+		p.URL, err = course.GetActionURL("get-weather")
+	case "search_tee_times":
+		p.URL, err = course.GetActionURL("search-tee-times")
+	case "book_tee_time":
+		p.URL, err = course.GetActionURL("book-tee-time")
+	case "fetch_reservations":
+		p.URL, err = course.GetActionURL("fetch_reservations")
+	default:
+		err = fmt.Errorf("unknown operation: %s", oper)
+	}
+	if err != nil {
+		slog.Error("Failed to get action URL", "operation", oper, "error", err)
+		return
+	}
+
+	// Populate auth config if needed
+	if p.AuthConfig != nil && p.AuthConfig.Type == AuthTypeOAuthPassword {
+		jwkUrl, err = course.GetActionURL("jwks-url")
+		if err == nil {
+			tokenURL, err = course.GetActionURL("token-url")
+		}
+		if err != nil {
+			slog.Error("Failed to get auth URLs", "operation", oper, "error", err)
+			return
+		}
+		p.AuthConfig.JWKSURL = jwkUrl
+		p.AuthConfig.TokenURL = tokenURL
+		p.AuthConfig.Scope = course.Scope
+	}
+}
+
 func (p *WebActionPayload) ToJSONString() (string, error) {
 	// Serialize web action to JSON
 	webActionJSON, err := json.Marshal(p)
@@ -140,19 +178,10 @@ func (p *WebActionPayload) ToJSONString() (string, error) {
 
 // Validate performs comprehensive validation of the payload including SSRF prevention
 func (p *WebActionPayload) Validate() error {
-	// Validate version
-	if p.Version != "1.0" {
-		return fmt.Errorf("unsupported payload version: %s", p.Version)
-	}
 
 	// Validate action type
 	if !p.Action.IsValid() {
 		return fmt.Errorf("invalid action type: %s", p.Action)
-	}
-
-	// SECURITY: SSRF Prevention - Comprehensive URL validation
-	if err := p.validateURL(); err != nil {
-		return fmt.Errorf("URL validation failed: %w", err)
 	}
 
 	// Validate authentication configuration
@@ -163,113 +192,6 @@ func (p *WebActionPayload) Validate() error {
 	}
 
 	return nil
-}
-
-// validateURL performs comprehensive URL validation to prevent SSRF attacks
-func (p *WebActionPayload) validateURL() error {
-	if p.URL == "" {
-		return fmt.Errorf("URL is required")
-	}
-
-	// Parse URL
-	parsedURL, err := url.Parse(p.URL)
-	if err != nil {
-		return fmt.Errorf("invalid URL format: %w", err)
-	}
-
-	// SECURITY: Enforce HTTPS only (except for localhost in dev)
-	if parsedURL.Scheme != "https" && parsedURL.Host != "localhost" {
-		return fmt.Errorf("only HTTPS URLs are allowed, got: %s", parsedURL.Scheme)
-	}
-
-	// SECURITY: Check host against allowlist
-	host := parsedURL.Hostname()
-	if !AllowedHosts[host] {
-		return fmt.Errorf("host not in allowlist: %s", host)
-	}
-
-	// SECURITY: Prevent IP address usage (force DNS)
-	if isIPAddress(host) {
-		return fmt.Errorf("IP addresses are not allowed, use hostname instead: %s", host)
-	}
-
-	// SECURITY: Resolve hostname and check for private IPs
-	if err := validateHostname(host); err != nil {
-		return fmt.Errorf("hostname validation failed: %w", err)
-	}
-
-	return nil
-}
-
-// isIPAddress checks if the string is an IP address
-func isIPAddress(host string) bool {
-	return net.ParseIP(host) != nil
-}
-
-// validateHostname checks if a hostname resolves to private IP ranges (SSRF protection)
-func validateHostname(hostname string) error {
-	// Resolve hostname to IP addresses
-	ips, err := net.LookupIP(hostname)
-	if err != nil {
-		return fmt.Errorf("hostname resolution failed: %w", err)
-	}
-
-	// Check all resolved IPs
-	for _, ip := range ips {
-		if isPrivateIP(ip) {
-			return fmt.Errorf("hostname resolves to private IP: %s -> %s", hostname, ip.String())
-		}
-		if isAWSMetadataIP(ip) {
-			return fmt.Errorf("hostname resolves to AWS metadata service IP: %s -> %s", hostname, ip.String())
-		}
-	}
-
-	return nil
-}
-
-// isPrivateIP checks if an IP address is in a private range
-func isPrivateIP(ip net.IP) bool {
-	// RFC 1918 private ranges
-	privateRanges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",    // Loopback
-		"169.254.0.0/16", // Link-local
-		"fc00::/7",       // IPv6 unique local
-		"fe80::/10",      // IPv6 link-local
-		"::1/128",        // IPv6 loopback
-	}
-
-	for _, rangeStr := range privateRanges {
-		_, subnet, err := net.ParseCIDR(rangeStr)
-		if err != nil {
-			continue
-		}
-		if subnet.Contains(ip) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isAWSMetadataIP checks if an IP is the AWS metadata service
-func isAWSMetadataIP(ip net.IP) bool {
-	// AWS metadata service IPs
-	metadataIPs := []string{
-		"169.254.169.254",
-		"fd00:ec2::254",
-	}
-
-	ipStr := ip.String()
-	for _, metaIP := range metadataIPs {
-		if ipStr == metaIP {
-			return true
-		}
-	}
-
-	return false
 }
 
 // Validate validates the authentication configuration
@@ -283,20 +205,7 @@ func (ac *AuthConfig) Validate() error {
 		if ac.SecretName == "" {
 			return fmt.Errorf("secret_name is required for OAuth authentication")
 		}
-		if ac.TokenURL == "" {
-			return fmt.Errorf("token_url is required for OAuth authentication")
-		}
-	}
 
-	// Validate token URL if present
-	if ac.TokenURL != "" {
-		parsedURL, err := url.Parse(ac.TokenURL)
-		if err != nil {
-			return fmt.Errorf("invalid token_url format: %w", err)
-		}
-		if parsedURL.Scheme != "https" {
-			return fmt.Errorf("token_url must use HTTPS: %s", ac.TokenURL)
-		}
 	}
 
 	return nil

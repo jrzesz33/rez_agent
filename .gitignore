@@ -61,3 +61,8 @@ infrastructure/infrastructure
 infrastructure/core
 cmd/agent/.venv/bin/f2py
 cmd/agent/__pycache__/agent_tools.cpython-311.pyc
+
+# AWS SAM
+.aws-sam/
+samconfig.toml.bak
+events/*.local.json

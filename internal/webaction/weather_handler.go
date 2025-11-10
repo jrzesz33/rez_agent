@@ -10,6 +10,7 @@ import (
 
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/models"
+	"github.com/jrzesz33/rez_agent/pkg/courses"
 )
 
 // WeatherHandler handles weather forecast actions
@@ -34,6 +35,24 @@ func (h *WeatherHandler) GetActionType() models.WebActionType {
 // Execute fetches weather forecast and formats notification
 func (h *WeatherHandler) Execute(ctx context.Context, args map[string]interface{}, payload *models.WebActionPayload) ([]string, error) {
 	h.logger.Debug("executing weather action",
+		slog.String("url", payload.URL),
+	)
+	course, err := courses.GetCourseByID(payload.CourseID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load course configuration: %w", err)
+	}
+	// Route based on operation type
+	operation, _ := args["operation"].(string)
+	if operation == "" {
+		operation = "get_weather"
+	}
+	// Add course config to payload
+	payload.AddCourseConfig(operation, *course)
+
+	h.logger.Debug("loaded course configuration",
+		slog.Int("course_id", course.CourseID),
+		slog.String("course_name", course.Name),
+		slog.String("origin", course.Origin),
 		slog.String("url", payload.URL),
 	)
 

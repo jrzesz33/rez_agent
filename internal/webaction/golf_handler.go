@@ -55,11 +55,16 @@ func (h *GolfHandler) Execute(ctx context.Context, args map[string]interface{}, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to load course configuration: %w", err)
 	}
+	// Route based on operation type
+	operation, _ := args["operation"].(string)
+	// Add course config to payload
+	payload.AddCourseConfig(operation, *course)
 
 	h.logger.Debug("loaded course configuration",
 		slog.Int("course_id", course.CourseID),
 		slog.String("course_name", course.Name),
 		slog.String("origin", course.Origin),
+		slog.String("url", payload.URL),
 	)
 
 	// Get token URL from course configuration
@@ -108,9 +113,6 @@ func (h *GolfHandler) Execute(ctx context.Context, args map[string]interface{}, 
 		slog.String("golfer_id", claims.GolferID),
 		slog.String("acct", claims.Acct))
 
-	// Route based on operation type
-	operation, _ := args["operation"].(string)
-
 	switch operation {
 	case "search_tee_times":
 		return h.handleSearchTeeTimes(ctx, course, payload, accessToken, claims)
@@ -119,23 +121,18 @@ func (h *GolfHandler) Execute(ctx context.Context, args map[string]interface{}, 
 			return nil, fmt.Errorf("JWT verification required for booking operations")
 		}
 		return h.handleBookTeeTime(ctx, course, payload, accessToken, claims)
-	case "fetch_reservations", "":
+	case "fetch_reservations":
+		payload.URL = fmt.Sprintf("%s?golferId=%s&pageSize=14&currentPage=1", payload.URL, claims.GolferID)
 		// Default to existing behavior
-		return h.handleFetchReservations(ctx, course, accessToken)
+		return h.handleFetchReservations(ctx, payload.URL, accessToken)
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", operation)
 	}
 }
 
 // handleFetchReservations handles fetching upcoming reservations
-func (h *GolfHandler) handleFetchReservations(ctx context.Context, course *courses.Course, accessToken string) ([]string, error) {
+func (h *GolfHandler) handleFetchReservations(ctx context.Context, reservationsURL string, accessToken string) ([]string, error) {
 	h.logger.Debug("fetching golf reservations")
-
-	// Get reservations URL from course configuration
-	reservationsURL, err := course.GetActionURL("get-reservations")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get reservations URL from course config: %w", err)
-	}
 
 	// Fetch reservations
 	reservations, err := h.fetchReservations(ctx, reservationsURL, accessToken)
@@ -162,7 +159,7 @@ func (h *GolfHandler) fetchReservations(ctx context.Context, apiURL, accessToken
 		"cache-control":   "no-cache, no-store, must-revalidate",
 		"client-id":       "onlineresweb",
 		"referer":         "https://birdsfoot.cps.golf/onlineresweb/my-reservation",
-		"user-agent":      "Mozilla/5.0 (compatible; rez-agent/1.0)",
+		"user-agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
 		"x-componentid":   "1",
 	}
 
@@ -343,7 +340,7 @@ func (h *GolfHandler) parseSearchTeeTimesParams(args models.WebActionPayload) (*
 	}
 
 	// Extract number of players (optional, default 1)
-	if args.NumberOfPlayers > 1 {
+	if args.NumberOfPlayers >= 1 && params.NumberOfPlayer <= 4 {
 		params.NumberOfPlayer = int(args.NumberOfPlayers)
 	}
 
@@ -570,8 +567,9 @@ func (h *GolfHandler) parseBookTeeTimeParams(args models.WebActionPayload) (*mod
 
 	// Extract number of players (optional, default 1)
 	// Handle both int and float64 (JSON unmarshals numbers as float64)
-
-	params.NumberOfPlayer = args.NumberOfPlayers
+	if args.NumberOfPlayers >= 1 && args.NumberOfPlayers <= 4 {
+		params.NumberOfPlayer = args.NumberOfPlayers
+	}
 
 	/*if startTime, ok := args["startSearchTime"].(string); ok && startTime != "" {
 		_searchDate, err := time.Parse("2006-01-02T15:04:05", startTime)

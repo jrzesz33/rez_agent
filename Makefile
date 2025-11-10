@@ -3,6 +3,7 @@
 # Variables
 BUILD_DIR = build
 INFRASTRUCTURE_DIR = infrastructure
+AGENT_DIR = cmd/agent/*
 
 # Colors for output
 GREEN := \033[0;32m
@@ -36,8 +37,9 @@ build-processor: ## Build processor Lambda function
 build-webaction: ## Build webaction Lambda function
 	@echo "$(YELLOW)Building webaction Lambda...$(NC)"
 	@mkdir -p $(BUILD_DIR)
+	@cp pkg/courses/courseInfo.yaml $(BUILD_DIR)/courseInfo.yaml
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o $(BUILD_DIR)/bootstrap ./cmd/webaction
-	@cd $(BUILD_DIR) && zip webaction.zip bootstrap && rm bootstrap
+	@cd $(BUILD_DIR) && zip webaction.zip bootstrap courseInfo.yaml && rm bootstrap && rm courseInfo.yaml
 	@echo "$(GREEN)WebAction Lambda built: $(BUILD_DIR)/webaction.zip$(NC)"
 
 build-webapi: ## Build webapi Lambda function
@@ -47,7 +49,8 @@ build-webapi: ## Build webapi Lambda function
 	@cd $(BUILD_DIR) && zip webapi.zip bootstrap && rm bootstrap
 	@echo "$(GREEN)WebAPI Lambda built: $(BUILD_DIR)/webapi.zip$(NC)"
 
-build-agent: ## Build AI agent Lambda function (Python)
+build-agent: $(AGENT_DIR) ## Build AI agent Lambda function (Python)
+	@rm -rf $(BUILD_DIR)/agent.zip
 	@echo "$(YELLOW)Building AI agent Lambda...$(NC)"
 	@mkdir -p $(BUILD_DIR)/agent
 	@cp cmd/agent/*.py $(BUILD_DIR)/agent/
@@ -87,7 +90,7 @@ build-mcp-client: ## Build MCP stdio client binary
 
 clean: ## Clean build artifacts (preserves pip cache)
 	@echo "$(YELLOW)Cleaning build directory...$(NC)"
-	@rm -rf $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR)/mcp.zip $(BUILD_DIR)/scheduler.zip $(BUILD_DIR)/processor.zip $(BUILD_DIR)/webaction.zip $(BUILD_DIR)/webapi.zip 
 	@echo "$(GREEN)Build directory cleaned (Docker pip cache preserved)$(NC)"
 
 clean-all: ## Clean build artifacts including pip cache
@@ -211,5 +214,122 @@ check-deps: ## Check if required dependencies are installed
 	@command -v aws >/dev/null 2>&1 || { echo "$(RED)AWS CLI is not installed$(NC)"; exit 1; }
 	@command -v docker >/dev/null 2>&1 || { echo "$(RED)Docker is not installed$(NC)"; exit 1; }
 	@echo "$(GREEN)All required dependencies are installed$(NC)"
+
+# SAM Local Testing targets
+sam-validate: ## Validate SAM template
+	@echo "$(YELLOW)Validating SAM template...$(NC)"
+	@sam validate --lint
+	@echo "$(GREEN)SAM template is valid$(NC)"
+
+sam-build: build ## Build SAM application
+	@echo "$(YELLOW)Building SAM application...$(NC)"
+	@sam build
+	@echo "$(GREEN)SAM build complete$(NC)"
+
+sam-deploy-local: sam-build ## Deploy SAM stack to AWS (local testing)
+	@echo "$(YELLOW)Deploying SAM stack to AWS...$(NC)"
+	@sam deploy
+	@echo "$(GREEN)SAM stack deployed$(NC)"
+
+sam-start-api: sam-build docker-network-create ## Start local API Gateway
+	@echo "$(YELLOW)Starting local API Gateway on http://localhost:3000$(NC)"
+	@sam local start-api
+
+sam-invoke-scheduler: sam-build docker-network-create ## Invoke scheduler function locally
+	@echo "$(YELLOW)Invoking scheduler function...$(NC)"
+	@sam local invoke SchedulerFunction --event events/scheduler-event.json
+
+sam-invoke-webaction: sam-build docker-network-create ## Invoke webaction function locally
+	@echo "$(YELLOW)Invoking webaction function...$(NC)"
+	@sam local invoke WebActionFunction --event events/webaction-sqs-event.json
+
+sam-invoke-webaction-golf: sam-build docker-network-create ## Invoke webaction function with golf event
+	@echo "$(YELLOW)Invoking webaction function (golf)...$(NC)"
+	@sam local invoke WebActionFunction --event events/webaction-golf-event.json
+
+sam-invoke-processor: sam-build docker-network-create ## Invoke processor function locally
+	@echo "$(YELLOW)Invoking processor function...$(NC)"
+	@sam local invoke ProcessorFunction --event events/processor-sqs-event.json
+
+sam-invoke-webapi: sam-build docker-network-create ## Invoke webapi function locally (uses AWS DynamoDB)
+	@echo "$(YELLOW)Invoking webapi function...$(NC)"
+	@echo "$(YELLOW)Note: This will use your AWS DynamoDB tables$(NC)"
+	@sam local invoke WebApiFunction --event events/webapi-create-message.json
+
+sam-invoke-mcp: sam-build docker-network-create ## Invoke MCP function locally
+	@echo "$(YELLOW)Invoking MCP function...$(NC)"
+	@sam local invoke McpFunction --event events/mcp-request.json
+
+sam-delete: ## Delete SAM stack from AWS
+	@echo "$(RED)Deleting SAM stack...$(NC)"
+	@sam delete
+	@echo "$(GREEN)SAM stack deleted$(NC)"
+
+sam-logs: ## Tail SAM local logs
+	@echo "$(YELLOW)Tailing SAM logs...$(NC)"
+	@sam logs --tail
+
+# DynamoDB Local targets
+dynamodb-local-start: ## Start DynamoDB Local in Docker
+	@echo "$(YELLOW)Starting DynamoDB Local...$(NC)"
+	@docker run -d -p 8000:8000 --name dynamodb-local \
+		--network rez-agent-local \
+		amazon/dynamodb-local || echo "$(YELLOW)DynamoDB Local already running$(NC)"
+	@echo "$(GREEN)DynamoDB Local running on http://localhost:8000$(NC)"
+
+dynamodb-local-stop: ## Stop DynamoDB Local
+	@echo "$(YELLOW)Stopping DynamoDB Local...$(NC)"
+	@docker stop dynamodb-local || true
+	@docker rm dynamodb-local || true
+	@echo "$(GREEN)DynamoDB Local stopped$(NC)"
+
+dynamodb-local-create-tables: ## Create local DynamoDB tables
+	@echo "$(YELLOW)Creating local DynamoDB tables...$(NC)"
+	@aws dynamodb create-table \
+		--table-name rez-agent-messages-local \
+		--attribute-definitions AttributeName=id,AttributeType=S \
+		--key-schema AttributeName=id,KeyType=HASH \
+		--billing-mode PAY_PER_REQUEST \
+		--endpoint-url http://localhost:8000 \
+		--region us-east-1 || echo "$(YELLOW)Messages table already exists$(NC)"
+	@aws dynamodb create-table \
+		--table-name rez-agent-schedules-local \
+		--attribute-definitions AttributeName=id,AttributeType=S \
+		--key-schema AttributeName=id,KeyType=HASH \
+		--billing-mode PAY_PER_REQUEST \
+		--endpoint-url http://localhost:8000 \
+		--region us-east-1 || echo "$(YELLOW)Schedules table already exists$(NC)"
+	@aws dynamodb create-table \
+		--table-name rez-agent-web-action-results-local \
+		--attribute-definitions AttributeName=id,AttributeType=S \
+		--key-schema AttributeName=id,KeyType=HASH \
+		--billing-mode PAY_PER_REQUEST \
+		--endpoint-url http://localhost:8000 \
+		--region us-east-1 || echo "$(YELLOW)Web action results table already exists$(NC)"
+	@echo "$(GREEN)Local DynamoDB tables created$(NC)"
+
+dynamodb-local-list-tables: ## List local DynamoDB tables
+	@aws dynamodb list-tables \
+		--endpoint-url http://localhost:8000 \
+		--region us-east-1
+
+# Docker network for local testing
+docker-network-create: ## Create Docker network for local testing
+	@echo "$(YELLOW)Creating Docker network...$(NC)"
+	@docker network create rez-agent-local || echo "$(YELLOW)Network already exists$(NC)"
+	@echo "$(GREEN)Docker network ready$(NC)"
+
+docker-network-delete: ## Delete Docker network
+	@echo "$(YELLOW)Deleting Docker network...$(NC)"
+	@docker network rm rez-agent-local || true
+	@echo "$(GREEN)Docker network deleted$(NC)"
+
+# Complete local testing setup
+local-setup: docker-network-create dynamodb-local-start dynamodb-local-create-tables ## Setup complete local testing environment
+	@echo "$(GREEN)Local testing environment ready!$(NC)"
+	@echo "$(GREEN)Run 'make sam-start-api' to start the API Gateway$(NC)"
+
+local-teardown: dynamodb-local-stop docker-network-delete ## Teardown local testing environment
+	@echo "$(GREEN)Local testing environment cleaned up$(NC)"
 
 .DEFAULT_GOAL := help

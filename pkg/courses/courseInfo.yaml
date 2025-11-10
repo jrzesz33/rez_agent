@@ -6,13 +6,13 @@ courses:
     origin: "https://birdsfoot.cps.golf"
     client-id: "onlineresweb"
     websiteid: "94fa26b7-2e63-4cbc-99e5-08d7d7f41522"
-    scope: "openid profile email"
+    scope: "openid profile onlinereservation sale inventory sh customer email recommend references"
     actions:
       - request:
           name: search-tee-times
           url: "/onlineres/onlineapi/api/v1/onlinereservation/TeeTimes"
       - request:
-          name: get-reservations
+          name: fetch_reservations
           url: "/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation"
       - request:
           name: book-tee-time
@@ -41,13 +41,13 @@ courses:
     origin: "https://totteridge.cps.golf"
     client-id: "onlineresweb"
     websiteid: "17691e46-9c9b-4e67-982f-08d7d8050db9"
-    scope: "openid profile email"
+    scope: "openid profile onlinereservation sale inventory sh customer email recommend references"
     actions:
       - request:
           name: search-tee-times
           url: "/onlineres/onlineapi/api/v1/onlinereservation/TeeTimes"
       - request:
-          name: get-reservations
+          name: fetch_reservations
           url: "/onlineres/onlineapi/api/v1/onlinereservation/UpcomingReservation"
       - request:
           name: book-tee-time

@@ -1,7 +1,7 @@
 {
     "version": "1.0",
     "arguments": {
-        "operation": "get_reservations"
+        "operation": "fetch_reservations"
     },
     "payload": {
         "action": "golf",

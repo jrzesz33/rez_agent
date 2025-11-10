@@ -1,0 +1,27 @@
+{
+  "httpMethod": "POST",
+  "path": "/",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"get_weather_forecast\",\"arguments\":{\"location\":\"Kansas\"}}}",
+  "isBase64Encoded": false,
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "test-api-id",
+    "domainName": "localhost",
+    "requestId": "test-request-id",
+    "routeKey": "POST /",
+    "stage": "$default",
+    "time": "15/Jan/2024:12:00:00 +0000",
+    "timeEpoch": 1705320000000,
+    "http": {
+      "method": "POST",
+      "path": "/",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "MCP Client"
+    }
+  }
+}

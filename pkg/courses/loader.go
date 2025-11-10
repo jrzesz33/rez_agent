@@ -43,6 +43,9 @@ type CoursesConfig struct {
 func (c *Course) GetActionURL(actionName string) (string, error) {
 	for _, action := range c.Actions {
 		if action.Request.Name == actionName {
+			if strings.HasPrefix(action.Request.URL, "http") {
+				return action.Request.URL, nil
+			}
 			return c.Origin + action.Request.URL, nil
 		}
 	}

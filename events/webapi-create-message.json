@@ -1,0 +1,27 @@
+{
+  "httpMethod": "POST",
+  "path": "/api/messages",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "body": "{\"message_type\":\"notify\",\"stage\":\"dev\",\"payload\":{\"message\":\"Test notification from SAM local\",\"title\":\"SAM Test\"}}",
+  "isBase64Encoded": false,
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "test-api-id",
+    "domainName": "localhost",
+    "requestId": "test-request-id",
+    "routeKey": "POST /api/messages",
+    "stage": "$default",
+    "time": "15/Jan/2024:12:00:00 +0000",
+    "timeEpoch": 1705320000000,
+    "http": {
+      "method": "POST",
+      "path": "/api/messages",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "SAM CLI"
+    }
+  }
+}

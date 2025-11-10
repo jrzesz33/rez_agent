@@ -1,0 +1,27 @@
+{
+  "httpMethod": "POST",
+  "path": "/api/schedules",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "body": "{\"action\":\"create\",\"name\":\"test-schedule-local\",\"schedule_expression\":\"cron(0 12 * * ? *)\",\"timezone\":\"America/New_York\",\"target_type\":\"web_action\",\"message_type\":\"web_action\",\"payload\":{\"version\":\"1.0\",\"action\":\"weather\",\"url\":\"https://api.weather.gov/gridpoints/TOP/31,80/forecast\"}}",
+  "isBase64Encoded": false,
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "test-api-id",
+    "domainName": "localhost",
+    "requestId": "test-request-id",
+    "routeKey": "POST /api/schedules",
+    "stage": "$default",
+    "time": "15/Jan/2024:12:00:00 +0000",
+    "timeEpoch": 1705320000000,
+    "http": {
+      "method": "POST",
+      "path": "/api/schedules",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "SAM CLI"
+    }
+  }
+}

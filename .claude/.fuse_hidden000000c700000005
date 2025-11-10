@@ -1,0 +1,70 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod download:*)",
+      "Bash(go build:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go test:*)",
+      "Bash(tree:*)",
+      "Bash(chmod:*)",
+      "Bash(pulumi stack:*)",
+      "Bash(pulumi destroy:*)",
+      "Bash(curl:*)",
+      "Bash(aws logs tail:*)",
+      "Bash(make build:*)",
+      "Bash(aws dynamodb list-tables:*)",
+      "Bash(aws lambda get-function-configuration:*)",
+      "Bash(aws iam get-role-policy:*)",
+      "Bash(aws iam list-role-policies:*)",
+      "Bash(aws lambda get-function:*)",
+      "mcp__chrome-devtools__list_pages",
+      "Bash(find:*)",
+      "Bash(aws secretsmanager get-secret-value:*)",
+      "Bash(aws secretsmanager list-secrets:*)",
+      "Bash(make:*)",
+      "Bash(bash:*)",
+      "Bash(pulumi preview:*)",
+      "Bash(aws sqs receive-message:*)",
+      "Bash(aws lambda list-event-source-mappings:*)",
+      "Bash(aws sns list-subscriptions-by-topic:*)",
+      "Bash(cat:*)",
+      "Bash(pulumi up:*)",
+      "Bash(aws sns set-subscription-attributes:*)",
+      "Bash(aws sns get-subscription-attributes:*)",
+      "Bash(go get:*)",
+      "Bash(go tool cover:*)",
+      "Bash(aws dynamodb describe-table:*)",
+      "Bash(mkdir:*)",
+      "Bash(PULUMI_DEBUG_COMMANDS=true pulumi preview:*)",
+      "Bash(go run:*)",
+      "Bash(unzip:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "Bash(go doc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(aws s3 ls:*)",
+      "Bash(aws s3api get-bucket-versioning:*)",
+      "Bash(aws s3api head-object:*)",
+      "Bash(aws lambda update-function-configuration:*)",
+      "Bash(aws s3 cp:*)",
+      "Bash(aws lambda update-function-code:*)",
+      "Bash(aws lambda invoke:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -d \"Claude needs your attention\" ntfy.sh/rzesz-alerts"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -95,9 +95,10 @@ func TestNewMessage(t *testing.T) {
 	createdBy := "test-system"
 	stage := StageDev
 	messageType := MessageTypeHelloWorld
-	payload := "test payload"
+	payload := make(map[string]interface{})
+	payload["key"] = "value"
 
-	msg := NewMessage(createdBy, stage, messageType, payload)
+	msg := NewMessage(createdBy, nil, "1.0", stage, messageType, payload)
 
 	if msg.CreatedBy != createdBy {
 		t.Errorf("NewMessage() CreatedBy = %v, want %v", msg.CreatedBy, createdBy)
@@ -108,7 +109,7 @@ func TestNewMessage(t *testing.T) {
 	if msg.MessageType != messageType {
 		t.Errorf("NewMessage() MessageType = %v, want %v", msg.MessageType, messageType)
 	}
-	if msg.Payload != payload {
+	if msg.Payload != nil {
 		t.Errorf("NewMessage() Payload = %v, want %v", msg.Payload, payload)
 	}
 	if msg.Status != StatusCreated {
@@ -129,7 +130,9 @@ func TestNewMessage(t *testing.T) {
 }
 
 func TestMessage_MarkQueued(t *testing.T) {
-	msg := NewMessage("test", StageDev, MessageTypeHelloWorld, "payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	msg := NewMessage("test", nil, "1.0", StageDev, MessageTypeHelloWorld, _payload)
 	originalUpdated := msg.UpdatedDate
 
 	// Sleep to ensure time difference
@@ -146,7 +149,9 @@ func TestMessage_MarkQueued(t *testing.T) {
 }
 
 func TestMessage_MarkProcessing(t *testing.T) {
-	msg := NewMessage("test", StageDev, MessageTypeHelloWorld, "payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	msg := NewMessage("test", nil, "1.0", StageDev, MessageTypeHelloWorld, _payload)
 	originalUpdated := msg.UpdatedDate
 
 	time.Sleep(10 * time.Millisecond)
@@ -162,7 +167,9 @@ func TestMessage_MarkProcessing(t *testing.T) {
 }
 
 func TestMessage_MarkCompleted(t *testing.T) {
-	msg := NewMessage("test", StageDev, MessageTypeHelloWorld, "payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	msg := NewMessage("test", nil, "1.0", StageDev, MessageTypeHelloWorld, _payload)
 	originalUpdated := msg.UpdatedDate
 
 	time.Sleep(10 * time.Millisecond)
@@ -178,7 +185,9 @@ func TestMessage_MarkCompleted(t *testing.T) {
 }
 
 func TestMessage_MarkFailed(t *testing.T) {
-	msg := NewMessage("test", StageDev, MessageTypeHelloWorld, "payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	msg := NewMessage("test", nil, "1.0", StageDev, MessageTypeHelloWorld, _payload)
 	errorMessage := "test error"
 	originalUpdated := msg.UpdatedDate
 
@@ -198,7 +207,9 @@ func TestMessage_MarkFailed(t *testing.T) {
 }
 
 func TestMessage_IncrementRetry(t *testing.T) {
-	msg := NewMessage("test", StageDev, MessageTypeHelloWorld, "payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	msg := NewMessage("test", nil, "1.0", StageDev, MessageTypeHelloWorld, _payload)
 	originalRetryCount := msg.RetryCount
 	originalUpdated := msg.UpdatedDate
 

@@ -1,11 +1,23 @@
 {
-    "name": "daily-tee-time-check",
-    "schedule_expression": "cron(0 6 * * ? *)",
-    "timezone": "America/New_York",
-    "target_type": "web_action",
-    "description": "Check for available tee times daily at 6 AM EST",
+    "version": "1.0",
+    "arguments": {
+       "name": "daily-tee-time-check",
+        "schedule_expression": "cron(0 6 * * ? *)",
+        "timezone": "America/New_York",
+        "target_type": "web_action",
+        "description": "Check for available tee times daily at 6 AM EST"
+    },
     "payload": {
-        "action": "check_tee_times",
-        "course": "Birdsfoot Golf Course"
-    }
+        "startSearchTime": "2025-11-14T09:30:00",
+        "endSearchTime": "2025-11-14T16:30:00",
+        "action": "golf",
+        "autoBook": false,
+        "courseID": 1, 
+        "auth_config": {
+            "type": "oauth_password",
+            "secret_name": "rez-agent/golf/credentials-prod"
+        }
+    },
+    "stage": "dev",
+    "message_type": "web_action"
 }

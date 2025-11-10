@@ -95,8 +95,28 @@ type WebActionPayload struct {
 	// Action is the action type identifier
 	Action WebActionType `json:"action" dynamodbav:"action"`
 
-	// Arguments contains action-specific parameters
-	Arguments map[string]interface{} `json:"arguments,omitempty" dynamodbav:"arguments,omitempty"`
+	//Start Search Time for golf tee time search
+	StartSearchTime string `json:"startSearchTime,omitempty" dynamodbav:"startSearchTime,omitempty"`
+
+	//End Search Time for golf tee time search
+	EndSearchTime string `json:"endSearchTime,omitempty" dynamodbav:"endSearchTime,omitempty"`
+	// AutoBook indicates whether to auto-book available tee times
+	AutoBook bool `json:"autoBook,omitempty" dynamodbav:"autoBook,omitempty"`
+
+	// CourseID is the identifier for the golf course
+	CourseID int `json:"courseID,omitempty" dynamodbav:"courseID,omitempty"`
+
+	//MaxResults limits the number of results returned
+	MaxResults int `json:"maxResults,omitempty" dynamodbav:"maxResults,omitempty"`
+
+	//Days number of days for search
+	Days int `json:"days,omitempty" dynamodbav:"days,omitempty"`
+
+	// Number of Players for golf tee time search
+	NumberOfPlayers int `json:"numberOfPlayers,omitempty" dynamodbav:"numberOfPlayers,omitempty"`
+
+	// teeSheetId is the identifier for the golf tee sheet
+	TeeSheetID int `json:"teeSheetID,omitempty" dynamodbav:"teeSheetID,omitempty"`
 
 	// AuthConfig contains authentication configuration
 	AuthConfig *AuthConfig `json:"auth_config,omitempty" dynamodbav:"auth_config,omitempty"`
@@ -368,9 +388,14 @@ func truncateResponseBody(body string) string {
 }
 
 // ParseWebActionPayload parses a JSON string into a WebActionPayload
-func ParseWebActionPayload(payloadJSON string) (*WebActionPayload, error) {
+func ParseWebActionPayload(payloadJSON map[string]interface{}) (*WebActionPayload, error) {
+	jsonBytes, err := json.Marshal(payloadJSON)
+	if err != nil {
+		fmt.Println("Error marshaling map:", err)
+		return nil, fmt.Errorf("failed to parse web action payload: %w", err)
+	}
 	var payload WebActionPayload
-	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+	if err := json.Unmarshal(jsonBytes, &payload); err != nil {
 		return nil, fmt.Errorf("failed to parse web action payload: %w", err)
 	}
 

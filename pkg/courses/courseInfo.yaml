@@ -6,6 +6,7 @@ courses:
     origin: "https://birdsfoot.cps.golf"
     client-id: "onlineresweb"
     websiteid: "94fa26b7-2e63-4cbc-99e5-08d7d7f41522"
+    scope: "openid profile email"
     actions:
       - request:
           name: search-tee-times
@@ -40,6 +41,7 @@ courses:
     origin: "https://totteridge.cps.golf"
     client-id: "onlineresweb"
     websiteid: "17691e46-9c9b-4e67-982f-08d7d8050db9"
+    scope: "openid profile email"
     actions:
       - request:
           name: search-tee-times

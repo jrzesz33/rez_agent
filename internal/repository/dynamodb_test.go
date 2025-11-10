@@ -35,7 +35,9 @@ func TestDynamoDBRepository_MethodSignatures(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	msg := models.NewMessage("test", models.StageDev, models.MessageTypeHelloWorld, "payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	msg := models.NewMessage("test", nil, "1.0", models.StageDev, models.MessageTypeHelloWorld, _payload)
 
 	// These will fail at runtime due to nil client, but ensure method signatures compile
 	t.Run("SaveMessage signature", func(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 // ActionHandler defines the interface for web action handlers
 type ActionHandler interface {
 	// Execute performs the web action and returns the formatted notification message
-	Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error)
+	Execute(ctx context.Context, args map[string]interface{}, payload *models.WebActionPayload) ([]string, error)
 
 	// GetActionType returns the action type this handler supports
 	GetActionType() models.WebActionType

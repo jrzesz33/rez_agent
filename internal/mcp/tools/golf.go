@@ -106,9 +106,6 @@ func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]inte
 			//Scope:      "openid profile email",
 			//JWKSURL:    jwksURL,
 		},
-		Arguments: map[string]interface{}{
-			"operation": "fetch_reservations",
-		},
 	}
 	/*
 		// serialize payload for logging
@@ -134,9 +131,11 @@ func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]inte
 			CLAUDE I WOULD LIKE TO MAKE THIS A ASYNCH PROCESS
 			RETURN A STATUS
 	*/
+	argsOut := make(map[string]interface{})
+	argsOut["operation"] = "fetch_reservations"
 
 	// Execute golf handler
-	results, err := t.golfHandler.Execute(ctx, payload)
+	results, err := t.golfHandler.Execute(ctx, argsOut, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch reservations: %w", err)
 	}
@@ -267,17 +266,18 @@ func (t *GolfSearchTeeTimesTool) Execute(ctx context.Context, args map[string]in
 			Scope:      "openid profile email",
 			JWKSURL:    jwksURL,
 		},
-		Arguments: map[string]interface{}{
-			"operation":   "search_tee_times",
-			"start_time":  startTime,
-			"end_time":    endTime,
-			"num_players": numPlayers,
-			"auto_book":   autoBook,
-		},
+
+		StartSearchTime: startTime,
+		EndSearchTime:   endTime,
+		NumberOfPlayers: numPlayers,
+		AutoBook:        autoBook,
 	}
 
+	_args := make(map[string]interface{})
+	_args["operation"] = "search_tee_times"
+
 	// Execute golf handler
-	results, err := t.golfHandler.Execute(ctx, payload)
+	results, err := t.golfHandler.Execute(ctx, _args, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search tee times: %w", err)
 	}
@@ -389,14 +389,13 @@ func (t *GolfBookTeeTimeTool) Execute(ctx context.Context, args map[string]inter
 			Scope:      "openid profile email",
 			JWKSURL:    jwksURL,
 		},
-		Arguments: map[string]interface{}{
-			"operation":    "book_tee_time",
-			"tee_sheet_id": teeSheetID,
-		},
+		TeeSheetID: teeSheetID,
 	}
+	_args := make(map[string]interface{})
+	_args["operation"] = "book_tee_time"
 
 	// Execute golf handler
-	results, err := t.golfHandler.Execute(ctx, payload)
+	results, err := t.golfHandler.Execute(ctx, _args, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to book tee time: %w", err)
 	}

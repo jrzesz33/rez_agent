@@ -23,7 +23,9 @@ func TestNewSQSBatchProcessor(t *testing.T) {
 }
 
 func TestParseSQSEvent(t *testing.T) {
-	message := models.NewMessage("test-system", models.StageDev, models.MessageTypeHelloWorld, "test payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	message := models.NewMessage("test-system", nil, "1.0", models.StageDev, models.MessageTypeHelloWorld, _payload)
 	messageJSON, _ := json.Marshal(message)
 
 	// Create SNS-wrapped message properly
@@ -96,7 +98,9 @@ func TestParseSQSEvent(t *testing.T) {
 }
 
 func TestSQSBatchProcessor_ProcessBatch(t *testing.T) {
-	message := models.NewMessage("test-system", models.StageDev, models.MessageTypeHelloWorld, "test payload")
+	_payload := make(map[string]interface{})
+	_payload["key"] = "value"
+	message := models.NewMessage("test-system", nil, "1.0", models.StageDev, models.MessageTypeHelloWorld, _payload)
 	messageJSON, _ := json.Marshal(message)
 
 	// Create SNS-wrapped message properly

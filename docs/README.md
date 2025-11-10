@@ -1,171 +1,262 @@
 # rez_agent Documentation
 
-## Overview
-
-This directory contains all design and architecture documentation for the rez_agent event-driven messaging system.
+Welcome to the rez_agent documentation. This directory contains comprehensive guides, API references, and technical documentation for the project.
 
 ## Quick Links
 
-- **[Architecture Summary](/workspaces/rez_agent/ARCHITECTURE_SUMMARY.md)** - Executive summary and deliverables overview
-- **[Architecture Documentation](./architecture/README.md)** - Complete architecture design documents
-- **[Quick Reference](./architecture/quick-reference.md)** - Implementation cheat sheet
-- **[OpenAPI Specification](./api/openapi.yaml)** - REST API contract
+### Getting Started
+- [Main README](../README.md) - Project overview and quick start
+- [Developer Guide](DEVELOPER_GUIDE.md) - Development workflow and best practices
+- [Deployment Guide](DEPLOYMENT_GUIDE.md) - Infrastructure deployment instructions
+
+### Technical Documentation
+- [Architecture](architecture/README.md) - System architecture and design patterns
+- [API Reference](api/README.md) - HTTP API endpoints and usage
+- [Message Schemas](MESSAGE_SCHEMAS.md) - Message format specifications
+
+### Additional Resources
+- [Design Documents](design/) - Detailed design specifications
+- [Test Examples](test/messages/) - Sample message payloads
 
 ## Documentation Structure
 
 ```
 docs/
-├── README.md (this file)
-├── architecture/
-│   ├── README.md                         # Architecture index and roadmap
-│   ├── service-architecture.md           # System design (26 pages)
-│   ├── data-model.md                     # DynamoDB schema (21 pages)
-│   ├── message-schemas.md                # SNS/SQS messages (19 pages)
-│   ├── authentication-authorization.md   # Security model (24 pages)
-│   ├── error-handling-resilience.md      # Resilience patterns (21 pages)
-│   ├── observability-monitoring.md       # Logging/metrics/tracing (25 pages)
-│   ├── configuration-management.md       # Configuration strategy (22 pages)
-│   └── quick-reference.md                # Cheat sheet (15 pages)
+├── README.md                    # This file
+├── DEVELOPER_GUIDE.md          # Development workflow and practices
+├── DEPLOYMENT_GUIDE.md         # Deployment procedures
+├── MESSAGE_SCHEMAS.md          # Message format specifications
 ├── api/
-│   └── openapi.yaml                      # REST API specification (600+ lines)
-└── design/
-    └── README.md                         # Initial design notes
+│   └── README.md              # API documentation
+├── architecture/
+│   └── README.md              # Architecture documentation
+├── design/                     # Design documents
+└── test/
+    └── messages/              # Test message examples
 ```
 
-## Getting Started
+## Documentation Overview
 
-### For Architects/Reviewers
+### [Developer Guide](DEVELOPER_GUIDE.md)
 
-1. Read [Architecture Summary](/workspaces/rez_agent/ARCHITECTURE_SUMMARY.md)
-2. Review [Service Architecture](./architecture/service-architecture.md)
-3. Examine [Data Model](./architecture/data-model.md)
-4. Review [OpenAPI Specification](./api/openapi.yaml)
+Comprehensive guide for developers working on rez_agent:
 
-### For Implementers
+- **Development Environment Setup**: Configure your local environment
+- **Project Structure**: Understand the codebase organization
+- **Development Workflow**: Git workflow, testing, and code review
+- **Code Style**: Go and Python coding standards
+- **Adding Features**: Step-by-step guides for new functionality
+- **Debugging**: Tools and techniques for troubleshooting
+- **Performance Optimization**: Best practices for Lambda performance
 
-1. Read [Architecture README](./architecture/README.md) for implementation roadmap
-2. Use [Quick Reference](./architecture/quick-reference.md) as cheat sheet
-3. Refer to individual architecture documents for detailed designs
-4. Follow the 8-week implementation roadmap (Phase 1-5)
+**Target Audience**: Developers contributing to the project
 
-### For Operators
+### [Deployment Guide](DEPLOYMENT_GUIDE.md)
 
-1. Read [Observability & Monitoring](./architecture/observability-monitoring.md)
-2. Review [Error Handling & Resilience](./architecture/error-handling-resilience.md)
-3. Check [Configuration Management](./architecture/configuration-management.md)
-4. Reference [Quick Reference](./architecture/quick-reference.md) for troubleshooting
+Complete deployment instructions for all environments:
 
-## Architecture Highlights
+- **Prerequisites**: Required tools and accounts
+- **Initial Setup**: First-time deployment steps
+- **Deployment Environments**: Dev, stage, and prod configurations
+- **Deployment Process**: Step-by-step deployment instructions
+- **Configuration**: Pulumi and environment variable setup
+- **Secrets Management**: AWS Secrets Manager usage
+- **Monitoring**: CloudWatch logs and metrics
+- **Rollback Procedures**: Emergency recovery steps
+- **CI/CD Pipeline**: GitHub Actions automation
 
-### System Components
+**Target Audience**: DevOps engineers and deployment managers
 
-- **4 Lambda Functions**: Scheduler, Web API, Message Processor, Notification Service
-- **Event-Driven**: EventBridge → SNS → SQS → Lambda → ntfy.sh
-- **Serverless**: DynamoDB, API Gateway, Cognito, CloudWatch, X-Ray
-- **Resilient**: Retries, circuit breaker, DLQ, graceful degradation
-- **Observable**: Structured logs, custom metrics, distributed tracing, alarms
+### [Architecture Documentation](architecture/README.md)
 
-### Key Decisions
+Deep dive into system architecture:
 
-| Decision | Choice | Documentation |
-|----------|--------|---------------|
-| Data Store | DynamoDB | [Data Model](./architecture/data-model.md) |
-| Message Queue | SNS + SQS | [Service Architecture](./architecture/service-architecture.md) |
-| Auth Provider | AWS Cognito | [Authentication](./architecture/authentication-authorization.md) |
-| API Contract | OpenAPI 3.0 | [OpenAPI Spec](./api/openapi.yaml) |
-| Resilience | Circuit Breaker | [Error Handling](./architecture/error-handling-resilience.md) |
-| Logging | Go log/slog | [Observability](./architecture/observability-monitoring.md) |
+- **System Overview**: High-level architecture
+- **Architecture Patterns**: Pub/Sub, message routing, repository pattern
+- **Component Diagram**: Visual representation of components
+- **Data Flow**: Message flow through the system
+- **Lambda Functions**: Detailed function descriptions
+- **Messaging Architecture**: SNS/SQS design
+- **Data Storage**: DynamoDB table schemas
+- **Security Architecture**: IAM, encryption, SSRF protection
+- **Scaling and Performance**: Auto-scaling and optimization
 
-### Performance Targets (SLO)
+**Target Audience**: Architects and senior developers
 
-- **API Availability**: 99.9% (30-day rolling)
-- **API Response Time**: p95 < 500ms, p99 < 1000ms
-- **Message Processing Latency**: p95 < 10 seconds
-- **Notification Success Rate**: 99% (7-day rolling)
+### [API Documentation](api/README.md)
 
-### Cost Estimate
+HTTP API reference:
 
-- **~$10.57/month** for 1,000 messages/day, 10,000 API requests/day
-- **~$50/month** at 10x scale (10,000 messages/day)
+- **Overview**: API characteristics and base URL
+- **Authentication**: Current and future auth methods
+- **Endpoints**: Complete endpoint reference
+  - `POST /api/messages`: Create messages
+  - `POST /api/schedules`: Create/manage schedules
+- **Request/Response Formats**: Schema definitions
+- **Error Handling**: Error codes and formats
+- **Examples**: cURL, JavaScript, and Python examples
+- **Security**: SSRF protection and data handling
+- **MCP Server API**: Claude AI integration endpoints
 
-## Implementation Roadmap
+**Target Audience**: API consumers and integration developers
 
-### Phase 1: Foundation (Week 1-2)
-- Infrastructure setup (DynamoDB, SNS/SQS, Cognito)
-- Scheduler Lambda (EventBridge → create message → SNS)
-- Message Processor Lambda (SQS → process → update status)
-- Notification Service Lambda (send to ntfy.sh)
+### [Message Schemas](MESSAGE_SCHEMAS.md)
 
-**Deliverable**: Scheduled "hello world" messages every 24 hours
+Complete message format specifications:
 
-### Phase 2: Web API (Week 3-4)
-- Lambda Authorizer (JWT validation)
-- Web API Lambda (all REST endpoints)
-- API Gateway configuration (CORS, rate limiting)
+- **Base Message Schema**: Core message structure
+- **Message Types**: Detailed schemas for all message types
+  - `hello_world`: Test messages
+  - `notify`: Notifications
+  - `agent_response`: AI agent responses
+  - `scheduled`: Scheduled tasks
+  - `web_action`: HTTP API calls
+  - `schedule_creation`: Dynamic schedules
+- **Authentication Configuration**: Auth type schemas
+- **Web Action Results**: Result record format
+- **Schedule Metadata**: Schedule configuration
+- **Validation Rules**: Input validation requirements
 
-**Deliverable**: REST API for frontend
+**Target Audience**: Developers and API consumers
 
-### Phase 3: Resilience (Week 5)
-- Circuit breaker implementation (DynamoDB-backed)
-- Enhanced error handling
-- DLQ alarms and monitoring
+## Additional Documentation
 
-**Deliverable**: System resilient to failures
+### Design Documents
 
-### Phase 4: Observability (Week 6)
-- Structured logging with correlation IDs
-- Custom CloudWatch metrics
-- AWS X-Ray tracing integration
-- CloudWatch alarms and dashboard
+The `design/` directory contains detailed design specifications for major features:
 
-**Deliverable**: Full observability stack
+- System architecture decisions
+- Feature implementation plans
+- Performance optimization strategies
+- Security considerations
 
-### Phase 5: Frontend & Polish (Week 7-8)
-- React/Next.js dashboard
-- OAuth integration
-- Unit and integration tests
-- Runbooks and documentation
+### Test Examples
 
-**Deliverable**: Production-ready system
+The `test/messages/` directory contains example message payloads:
 
-## Technology Stack
+- Web action requests
+- Schedule creation requests
+- Golf booking examples
+- Weather forecast examples
 
-### AWS Services
-- Lambda (Go 1.24), API Gateway (HTTP API), DynamoDB (on-demand)
-- SNS (pub/sub), SQS (queue + DLQ), EventBridge (scheduling)
-- Cognito (OAuth 2.0), Systems Manager Parameter Store (secrets)
-- CloudWatch Logs/Metrics, X-Ray (tracing)
+Use these as templates for creating your own messages.
 
-### Go Libraries
-- `log/slog` (logging), `aws/aws-lambda-go` (runtime)
-- `aws/aws-sdk-go-v2` (AWS SDK), `golang-jwt/jwt/v5` (JWT)
-- `google/uuid` (UUIDs)
+## Contributing to Documentation
 
-### Infrastructure as Code
-- AWS CDK (Go) or Terraform
+When adding or modifying features, please update the relevant documentation:
 
-## Documentation Quality
+1. **Code Changes**: Update Developer Guide
+2. **API Changes**: Update API Documentation
+3. **Infrastructure Changes**: Update Deployment Guide
+4. **Architecture Changes**: Update Architecture Documentation
+5. **Message Format Changes**: Update Message Schemas
 
-- ✅ **200+ pages** of comprehensive architecture documentation
-- ✅ **Go code examples** for all critical patterns
-- ✅ **AWS configuration** (IAM policies, service settings, alarms)
-- ✅ **Implementation guidance** (8-week roadmap, troubleshooting)
-- ✅ **Production-ready patterns** (resilience, observability, security)
+### Documentation Standards
 
-## Next Steps
+- Use clear, concise language
+- Include code examples
+- Add diagrams for complex concepts
+- Keep examples up-to-date
+- Use proper Markdown formatting
+- Add links between related docs
 
-1. Review [Architecture Summary](/workspaces/rez_agent/ARCHITECTURE_SUMMARY.md)
-2. Read [Architecture README](./architecture/README.md)
-3. Set up AWS account and development environment
-4. Initialize Go project structure
-5. Begin Phase 1 implementation (Foundation)
+## Getting Help
 
-## Questions?
+If you need help:
 
-Refer to the detailed architecture documents or create a GitHub issue for clarifications during implementation.
+1. **Search Documentation**: Use Ctrl+F or search in your editor
+2. **Check Examples**: Review test message examples
+3. **Review Logs**: Check CloudWatch logs for errors
+4. **GitHub Issues**: Report bugs or request features
+5. **Code Comments**: Check inline code documentation
+
+## Documentation Maintenance
+
+Documentation is maintained alongside code:
+
+- **Version Control**: All docs in Git
+- **Review Process**: Docs reviewed in PRs
+- **Update Triggers**: Update docs when:
+  - Adding new features
+  - Changing APIs
+  - Modifying infrastructure
+  - Updating dependencies
+  - Fixing bugs with behavioral changes
+
+## Quick Reference
+
+### Common Commands
+
+```bash
+# Build all Lambda functions
+make build
+
+# Run tests
+make test
+
+# Deploy to dev
+make deploy-dev
+
+# View logs
+make lambda-logs-webaction
+
+# Format code
+make fmt
+```
+
+### Common Endpoints
+
+```bash
+# Create a message
+POST /api/messages
+
+# Create a schedule
+POST /api/schedules
+```
+
+### Environment Variables
+
+```bash
+# Required
+STAGE=dev|stage|prod
+DYNAMODB_TABLE_NAME=...
+NTFY_URL=...
+
+# Optional
+LOG_LEVEL=DEBUG|INFO|WARN|ERROR
+```
+
+### Useful Links
+
+- **Main README**: [../README.md](../README.md)
+- **GitHub Repository**: [https://github.com/jrzesz33/rez_agent](https://github.com/jrzesz33/rez_agent)
+- **AWS Console**: [https://console.aws.amazon.com/](https://console.aws.amazon.com/)
+- **Pulumi Console**: [https://app.pulumi.com/](https://app.pulumi.com/)
+
+## Documentation Roadmap
+
+Planned documentation additions:
+
+- [ ] MCP Server detailed guide
+- [ ] AI Agent configuration guide
+- [ ] Security best practices
+- [ ] Performance tuning guide
+- [ ] Troubleshooting cookbook
+- [ ] Video tutorials
+- [ ] Interactive API playground
+
+## Feedback
+
+Have suggestions for improving the documentation?
+
+- Open an issue on GitHub
+- Submit a pull request
+- Contact the maintainers
 
 ---
 
-**Documentation Version**: 1.0 (2025-10-21)
+**Last Updated**: 2024-01-15
 
-**Status**: Complete and ready for implementation
+**Documentation Version**: 1.0
+
+**Maintained By**: [@jrzesz33](https://github.com/jrzesz33)

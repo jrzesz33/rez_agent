@@ -21,11 +21,11 @@ import (
 
 // ProcessorHandler handles SQS messages and sends notifications
 type ProcessorHandler struct {
-	config           *appconfig.Config
-	repository       repository.MessageRepository
+	config             *appconfig.Config
+	repository         repository.MessageRepository
 	notificationClient notification.Client
-	batchProcessor   *messaging.SQSBatchProcessor
-	logger           *slog.Logger
+	batchProcessor     *messaging.SQSBatchProcessor
+	logger             *slog.Logger
 }
 
 // NewProcessorHandler creates a new processor handler instance
@@ -89,7 +89,7 @@ func (h *ProcessorHandler) processMessage(ctx context.Context, message *models.M
 
 	// Send notification to ntfy.sh
 	notificationTitle := fmt.Sprintf("Rez Agent - %s", h.config.Stage.String())
-	err = h.notificationClient.(*notification.NtfyClient).SendWithTitle(ctx, notificationTitle, message.Payload)
+	err = h.notificationClient.(*notification.NtfyClient).SendWithTitle(ctx, notificationTitle, message.Payload["message"].(string))
 	if err != nil {
 		h.logger.ErrorContext(ctx, "failed to send notification",
 			slog.String("message_id", message.ID),

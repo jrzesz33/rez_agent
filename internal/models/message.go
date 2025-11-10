@@ -1,9 +1,7 @@
 package models
 
 import (
-	"encoding/json"
-	"log/slog"
-	"net/http"
+	"fmt"
 	"time"
 )
 
@@ -122,10 +120,13 @@ type Message struct {
 	Status Status `json:"status" dynamodbav:"status"`
 
 	// Payload is the message content
-	Payload string `json:"payload" dynamodbav:"payload"`
+	Payload map[string]interface{} `json:"payload" dynamodbav:"payload"`
 
 	// Arguments contains additional parameters for the message
 	Arguments map[string]interface{} `json:"arguments,omitempty" dynamodbav:"arguments,omitempty"`
+
+	// AuthConfig contains authentication configuration if needed
+	AuthConfig *AuthConfig `json:"auth_config,omitempty" dynamodbav:"auth_config,omitempty"`
 
 	// UpdatedDate is when the message was last updated
 	UpdatedDate time.Time `json:"updated_date,omitempty" dynamodbav:"updated_date,omitempty"`
@@ -138,7 +139,7 @@ type Message struct {
 }
 
 // NewMessage creates a new message with default values
-func NewMessage(createdBy string, arguments map[string]interface{}, version string, stage Stage, messageType MessageType, payload string) *Message {
+func NewMessage(createdBy string, arguments map[string]interface{}, version string, stage Stage, messageType MessageType, payload map[string]interface{}) *Message {
 	now := time.Now().UTC()
 	return &Message{
 		Version:     version,
@@ -154,46 +155,30 @@ func NewMessage(createdBy string, arguments map[string]interface{}, version stri
 		RetryCount:  0,
 	}
 }
-func (m *Message) Validated(createdBy string) bool {
-	now := time.Now().UTC()
-	//Claude write some validation logic here e.g. Version must be here and also based on the message Type e.g. web action has to have action field
-	if !m.MessageType.IsValid() {
-		return false
-	}
-
-	m.ID = generateMessageID(now)
-	m.CreatedDate = now
-	m.CreatedBy = createdBy
-	m.Status = StatusCreated
-	m.UpdatedDate = now
-	m.RetryCount = 0
-
+func (m *Message) Validate() error {
 	switch m.MessageType {
 	case MessageTypeWebAction:
-		webActionPayload := &WebActionPayload{
-			Version:    m.Version,
-			URL:        m.Arguments["url"].(string),
-			Action:     m.Arguments["action"].(WebActionType),
-			Arguments:  m.Arguments,
-			AuthConfig: m.AuthConfig,
-		}
-
-		// Serialize web action to JSON
-		webActionJSON, err := json.Marshal(webActionPayload)
+		_, err := ParseWebActionPayload(m.Payload)
 		if err != nil {
-			h.logger.ErrorContext(ctx, "failed to serialize web action", slog.String("error", err.Error()))
-			return h.createErrorResponse(http.StatusInternalServerError, "failed to serialize web action"), err
+			return err
 		}
-		payloadStr = string(webActionJSON)
 	case MessageTypeScheduleCreation:
-		// For these message types, ensure that the payload is not empty
-		if m.Payload == "" {
-			return false
+		//Schedules Creation requires Arguments to be present
+		if m.Arguments != nil && m.Arguments["action"] != nil {
+			action, ok := m.Arguments["action"].(string)
+			if !ok || action == "" {
+				return fmt.Errorf("invalid action argument for schedule creation message")
+			}
+			if action == "create" {
+				if m.Arguments["name"] == nil || m.Arguments["schedule_expression"] == nil || m.Arguments["target_type"] == nil || m.Arguments["timezone"] == nil {
+					return fmt.Errorf("missing required arguments for schedule creation...name, schedule_expression, target_type, and timezone are required")
+				}
+			}
+		} else {
+			return fmt.Errorf("arguments are required for schedule creation messages")
 		}
-		// Additional validation can be added here as needed
 	}
-
-	return true
+	return nil
 }
 
 // generateMessageID generates a unique message ID based on timestamp and random component

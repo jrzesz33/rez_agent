@@ -30,6 +30,7 @@ type Course struct {
 	Origin      string   `yaml:"origin"`
 	ClientID    string   `yaml:"client-id"`
 	WebsiteID   string   `yaml:"websiteid"`
+	Scope       string   `yaml:"scope"`
 	Actions     []Action `yaml:"actions"`
 }
 
@@ -62,6 +63,22 @@ func LoadCourses() (*CoursesConfig, error) {
 		return nil, fmt.Errorf("failed to parse courseInfo.yaml: %w", err)
 	}
 	return &config, nil
+}
+
+// GetCourseByID finds a course by ID
+func GetCourseByID(courseID int) (*Course, error) {
+	config, err := LoadCourses()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range config.Courses {
+		if config.Courses[i].CourseID == courseID {
+			return &config.Courses[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("course not found with ID: %d", courseID)
 }
 
 // GetCourseByName finds a course by name (case-insensitive partial match)

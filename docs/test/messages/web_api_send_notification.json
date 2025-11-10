@@ -1,5 +1,8 @@
 {
-    "payload": "This is a test Notification",
+    "version": "1.0",
+    "payload": {
+        "message": "This is a test Notification"
+    },
     "stage": "dev",
     "message_type": "notify"
 }

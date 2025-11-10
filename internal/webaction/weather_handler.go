@@ -32,17 +32,15 @@ func (h *WeatherHandler) GetActionType() models.WebActionType {
 }
 
 // Execute fetches weather forecast and formats notification
-func (h *WeatherHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
+func (h *WeatherHandler) Execute(ctx context.Context, args map[string]interface{}, payload *models.WebActionPayload) ([]string, error) {
 	h.logger.Debug("executing weather action",
 		slog.String("url", payload.URL),
 	)
 
 	// Extract number of days from arguments (default: 2)
 	numDays := 2
-	if daysArg, ok := payload.Arguments["days"]; ok {
-		if days, ok := daysArg.(float64); ok {
-			numDays = int(days)
-		}
+	if payload.Days > 0 {
+		numDays = payload.Days
 	}
 
 	// Fetch weather data

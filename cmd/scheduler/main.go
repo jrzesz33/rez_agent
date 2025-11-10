@@ -23,12 +23,13 @@ import (
 
 // SchedulerHandler handles EventBridge scheduled events and schedule creation
 type SchedulerHandler struct {
-	config              *appconfig.Config
-	messageRepository   repository.MessageRepository
-	scheduleRepository  repository.ScheduleRepository
-	publisher           messaging.SNSPublisher
+	config               *appconfig.Config
+	messageRepository    repository.MessageRepository
+	scheduleRepository   repository.ScheduleRepository
+	publisher            messaging.SNSPublisher
+	sqsProcessor         *messaging.SQSBatchProcessor
 	eventBridgeScheduler internalscheduler.EventBridgeScheduler
-	logger              *slog.Logger
+	logger               *slog.Logger
 }
 
 // NewSchedulerHandler creates a new scheduler handler instance
@@ -38,15 +39,17 @@ func NewSchedulerHandler(
 	scheduleRepo repository.ScheduleRepository,
 	pub messaging.SNSPublisher,
 	ebScheduler internalscheduler.EventBridgeScheduler,
+	sqsProcessor *messaging.SQSBatchProcessor,
 	logger *slog.Logger,
 ) *SchedulerHandler {
 	return &SchedulerHandler{
-		config:              cfg,
-		messageRepository:   messageRepo,
-		scheduleRepository:  scheduleRepo,
-		publisher:           pub,
+		config:               cfg,
+		messageRepository:    messageRepo,
+		scheduleRepository:   scheduleRepo,
+		publisher:            pub,
 		eventBridgeScheduler: ebScheduler,
-		logger:              logger,
+		sqsProcessor:         sqsProcessor,
+		logger:               logger,
 	}
 }
 
@@ -56,10 +59,17 @@ func (h *SchedulerHandler) HandleEvent(ctx context.Context, event interface{}) e
 		slog.String("stage", h.config.Stage.String()),
 	)
 
-	// Try to parse as SNS event (for schedule creation)
-	if snsEvent, ok := event.(events.SNSEvent); ok && len(snsEvent.Records) > 0 {
-		h.logger.InfoContext(ctx, "detected SNS event, handling schedule creation")
-		return h.handleSNSEvent(ctx, snsEvent)
+	// Try to parse as SNS event
+	if snsEvent, ok := event.(events.SQSEvent); ok {
+		h.logger.InfoContext(ctx, "detected SNS event for schedule management",
+			slog.Int("record_count", len(snsEvent.Records)),
+		)
+		// Use SQS batch processor to handle messages with proper retry logic
+		resp, err := h.sqsProcessor.ProcessBatch(ctx, snsEvent, h.handleSNSEvent)
+		h.logger.InfoContext(ctx, "sqs battch processing completed",
+			slog.Any("failures", resp.BatchItemFailures),
+		)
+		return err
 	}
 
 	// Try to parse as map (could be from EventBridge Scheduler with custom input)
@@ -70,110 +80,42 @@ func (h *SchedulerHandler) HandleEvent(ctx context.Context, event interface{}) e
 		}
 	}
 
-	// Default: treat as standard EventBridge trigger
-	h.logger.InfoContext(ctx, "handling standard EventBridge scheduled event")
-	return h.handleScheduledEvent(ctx)
+	return nil
 }
 
 // handleSNSEvent processes SNS schedule creation/management requests
-func (h *SchedulerHandler) handleSNSEvent(ctx context.Context, event events.SNSEvent) error {
-	for _, record := range event.Records {
-		h.logger.InfoContext(ctx, "processing SNS record",
-			slog.String("message_id", record.SNS.MessageID),
-		)
+func (h *SchedulerHandler) handleSNSEvent(ctx context.Context, message *models.Message) error {
 
-		var req models.ScheduleCreationRequest
-		if err := json.Unmarshal([]byte(record.SNS.Message), &req); err != nil {
-			h.logger.ErrorContext(ctx, "failed to unmarshal SNS message",
-				slog.String("error", err.Error()),
-			)
-			return fmt.Errorf("failed to unmarshal schedule request: %w", err)
-		}
-
-		switch req.Action {
-		case "create":
-			return h.createSchedule(ctx, &req.Schedule)
-		case "delete":
-			return h.deleteSchedule(ctx, req.Schedule.Name)
-		case "pause":
-			return h.pauseSchedule(ctx, req.Schedule.Name)
-		case "resume":
-			return h.resumeSchedule(ctx, req.Schedule.Name)
-		default:
-			return fmt.Errorf("unknown action: %s", req.Action)
-		}
-	}
-
-	return nil
-}
-
-// handleScheduledEvent processes standard EventBridge scheduled events (legacy behavior)
-func (h *SchedulerHandler) handleScheduledEvent(ctx context.Context) error {
-	h.logger.InfoContext(ctx, "processing standard scheduled event")
-
-	// Create a new "hello world" message
-	message := models.NewMessage(
-		"scheduler",
-		h.config.Stage,
-		models.MessageTypeScheduled,
-		"Hello World! This is a scheduled message from rez_agent.",
-	)
-
-	h.logger.DebugContext(ctx, "created message",
-		slog.String("message_id", message.ID),
-		slog.String("type", message.MessageType.String()),
-	)
-
-	// Save message to DynamoDB
-	err := h.messageRepository.SaveMessage(ctx, message)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to save message",
-			slog.String("message_id", message.ID),
+	/*var req models.ScheduleDefinition
+	if err := json.Unmarshal([]byte(message.Payload), &req); err != nil {
+		h.logger.ErrorContext(ctx, "failed to unmarshal SNS message",
 			slog.String("error", err.Error()),
 		)
-		return fmt.Errorf("failed to save message: %w", err)
+		return fmt.Errorf("failed to unmarshal schedule request: %w", err)
+	}*/
+	id := message.Arguments["action"].(string)
+
+	action := message.Arguments["action"].(string)
+	switch action {
+	case "create":
+		return h.createSchedule(ctx, message)
+	case "delete":
+		return h.deleteSchedule(ctx, id)
+	case "pause":
+		return h.pauseSchedule(ctx, id)
+	case "resume":
+		return h.resumeSchedule(ctx, id)
+	default:
+		return fmt.Errorf("unknown action: %s", action)
 	}
 
-	h.logger.DebugContext(ctx, "saved message to DynamoDB",
-		slog.String("message_id", message.ID),
-	)
-
-	// Mark message as queued
-	message.MarkQueued()
-
-	// Update message status in DynamoDB
-	err = h.messageRepository.UpdateStatus(ctx, message.ID, message.Status, "")
-	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to update message status",
-			slog.String("message_id", message.ID),
-			slog.String("error", err.Error()),
-		)
-		return fmt.Errorf("failed to update message status: %w", err)
-	}
-
-	// Publish message to SNS
-	err = h.publisher.PublishMessage(ctx, message)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to publish message",
-			slog.String("message_id", message.ID),
-			slog.String("error", err.Error()),
-		)
-		return fmt.Errorf("failed to publish message: %w", err)
-	}
-
-	h.logger.InfoContext(ctx, "successfully processed scheduled event",
-		slog.String("message_id", message.ID),
-		slog.String("status", message.Status.String()),
-	)
-
-	return nil
 }
 
 // handleDynamicScheduleExecution handles executions from dynamically created schedules
 func (h *SchedulerHandler) handleDynamicScheduleExecution(ctx context.Context, eventData map[string]interface{}) error {
 	scheduleID, _ := eventData["schedule_id"].(string)
 	targetType, _ := eventData["target_type"].(string)
-	payload, _ := eventData["payload"].(map[string]interface{})
+	payload, _ := eventData["payload"].(string)
 
 	h.logger.InfoContext(ctx, "handling dynamic schedule execution",
 		slog.String("schedule_id", scheduleID),
@@ -192,23 +134,29 @@ func (h *SchedulerHandler) handleDynamicScheduleExecution(ctx context.Context, e
 
 	// Create message based on target type
 	var message *models.Message
-	payloadJSON, _ := json.Marshal(payload)
+	// Declare a map to hold the unmarshaled JSON
+	var result map[string]interface{}
+
+	// Unmarshal the JSON byte slice into the map
+	err = json.Unmarshal([]byte(payload), &result)
+	if err != nil {
+		fmt.Println("Error unmarshaling JSON:", err)
+		return fmt.Errorf("unsupported payload: %s", targetType)
+	}
 
 	switch models.TargetType(targetType) {
 	case models.TargetTypeWebAction:
 		message = models.NewMessage(
-			fmt.Sprintf("schedule:%s", scheduleID),
-			h.config.Stage,
+			"schedule-executor", nil,
+			"1.0", h.config.Stage,
 			models.MessageTypeWebAction,
-			string(payloadJSON),
-		)
+			result)
 	case models.TargetTypeNotification:
 		message = models.NewMessage(
-			fmt.Sprintf("schedule:%s", scheduleID),
-			h.config.Stage,
+			"schedule-executor", nil,
+			"1.0", h.config.Stage,
 			models.MessageTypeNotification,
-			string(payloadJSON),
-		)
+			result)
 	default:
 		return fmt.Errorf("unsupported target type: %s", targetType)
 	}
@@ -245,23 +193,21 @@ func (h *SchedulerHandler) handleDynamicScheduleExecution(ctx context.Context, e
 }
 
 // createSchedule creates a new EventBridge Schedule
-func (h *SchedulerHandler) createSchedule(ctx context.Context, def *models.ScheduleDefinition) error {
-	h.logger.InfoContext(ctx, "creating new schedule",
-		slog.String("name", def.Name),
-		slog.String("expression", def.ScheduleExpression),
-	)
+func (h *SchedulerHandler) createSchedule(ctx context.Context, def *models.Message) error {
 
-	// Validate schedule definition
-	if err := def.Validate(); err != nil {
-		h.logger.ErrorContext(ctx, "invalid schedule definition",
-			slog.String("error", err.Error()),
-		)
-		return fmt.Errorf("invalid schedule: %w", err)
-	}
+	_name := def.Arguments["name"].(string)
+	_expression := def.Arguments["schedule_expression"].(string)
+	_timezone := def.Arguments["timezone"].(string)
+	_targetType := def.Arguments["target_type"].(string)
+
+	h.logger.InfoContext(ctx, "creating new schedule",
+		slog.String("name", _name),
+		slog.String("expression", _expression),
+	)
 
 	// Determine target topic ARN based on target type
 	var targetTopicArn string
-	switch models.TargetType(def.TargetType) {
+	switch models.TargetType(_targetType) {
 	case models.TargetTypeWebAction:
 		targetTopicArn = h.config.WebActionsSNSTopicArn
 	case models.TargetTypeNotification:
@@ -272,10 +218,10 @@ func (h *SchedulerHandler) createSchedule(ctx context.Context, def *models.Sched
 
 	// Create schedule model
 	schedule, err := models.NewSchedule(
-		def.Name,
-		def.ScheduleExpression,
-		def.Timezone,
-		models.TargetType(def.TargetType),
+		_name,
+		_expression,
+		_timezone,
+		models.TargetType(_targetType),
 		targetTopicArn,
 		def.Payload,
 		"scheduler-lambda", // created_by
@@ -285,8 +231,8 @@ func (h *SchedulerHandler) createSchedule(ctx context.Context, def *models.Sched
 		return fmt.Errorf("failed to create schedule model: %w", err)
 	}
 
-	if def.Description != "" {
-		schedule.Description = def.Description
+	if def.Arguments["Description"] != nil {
+		schedule.Description = def.Arguments["Description"].(string)
 	}
 
 	// Get current Lambda ARN (self-invoke for schedule execution)
@@ -438,11 +384,14 @@ func main() {
 	// Create publisher
 	publisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, cfg.AgentResponseTopicArn, cfg.ScheduleCreationTopicArn, logger)
 
+	// Initialize SQS processor
+	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
+
 	// Create EventBridge Scheduler service
 	ebScheduler := internalscheduler.NewAWSEventBridgeScheduler(schedulerClient, cfg.EventBridgeExecutionRoleArn)
 
 	// Create handler
-	handler := NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, logger)
+	handler := NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, sqsProcessor, logger)
 
 	// Start Lambda handler
 	lambda.Start(handler.HandleEvent)

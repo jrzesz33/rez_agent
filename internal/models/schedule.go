@@ -143,15 +143,14 @@ func NewSchedule(
 		return nil, fmt.Errorf("invalid timezone %q: %w", timezone, err)
 	}
 
-	// Convert payload to JSON string
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
 	// Generate EventBridge name (must be unique and conform to naming rules)
 	eventBridgeName := generateEventBridgeName(name, stage)
-
+	// 1. Marshal the map into a JSON byte slice
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println("Error marshaling map:", err)
+		return nil, fmt.Errorf("invalid payload %q: %w", timezone, err)
+	}
 	return &Schedule{
 		ID:                 generateScheduleID(now),
 		Name:               name,
@@ -159,7 +158,7 @@ func NewSchedule(
 		Timezone:           timezone,
 		TargetType:         targetType,
 		TargetTopicArn:     targetTopicArn,
-		Payload:            string(payloadBytes),
+		Payload:            string(jsonBytes),
 		EventBridgeName:    eventBridgeName,
 		Status:             ScheduleStatusActive,
 		CreatedBy:          createdBy,
@@ -329,14 +328,15 @@ func ValidateScheduleExpression(expr string) error {
 	return fmt.Errorf("schedule expression must start with rate(), cron(), or at()")
 }
 
-// ScheduleCreationRequest represents the request to create a schedule
+/*/ ScheduleCreationRequest represents the request to create a schedule
 type ScheduleCreationRequest struct {
 	Action   string             `json:"action"` // "create", "update", "delete", "pause", "resume"
 	Schedule ScheduleDefinition `json:"schedule"`
-}
+}*/
 
 // ScheduleDefinition represents the schedule configuration in API requests
 type ScheduleDefinition struct {
+	ID                 string                 `json:"id"`
 	Name               string                 `json:"name"`
 	Description        string                 `json:"description,omitempty"`
 	ScheduleExpression string                 `json:"schedule_expression"`

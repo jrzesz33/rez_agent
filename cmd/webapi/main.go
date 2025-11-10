@@ -88,8 +88,6 @@ func (h *WebAPIHandler) HandleRequest(ctx context.Context, request events.APIGat
 		response, err = h.handleListMessages(ctx, request)
 	case path == "/api/messages" && method == "POST":
 		response, err = h.handleCreateMessage(ctx, request)
-	case path == "/api/schedules" && method == "POST":
-		response, err = h.handleCreateSchedule(ctx, request)
 	case path == "/api/metrics" && method == "GET":
 		response, err = h.handleMetrics(ctx)
 	default:
@@ -201,7 +199,6 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 	if req.Stage == "" {
 		req.Stage = h.config.Stage
 	}
-	req.Validated("webapi")
 
 	if !req.Stage.IsValid() {
 		return h.createErrorResponse(http.StatusBadRequest, "invalid stage value"), nil
@@ -213,66 +210,35 @@ func (h *WebAPIHandler) handleCreateMessage(ctx context.Context, request events.
 		messageType = models.MessageTypeNotification
 	}
 
-	// Prepare payload string
-	var payloadStr string
-	switch messageType {
-	case models.MessageTypeWebAction:
-		// Construct WebActionPayload from request fields
-		webActionPayload := &models.WebActionPayload{
-			Version:    req.Version,
-			URL:        req.URL,
-			Action:     req.Action,
-			Arguments:  req.Arguments,
-			AuthConfig: req.AuthConfig,
-		}
-
-		// Serialize web action to JSON
-		webActionJSON, err := json.Marshal(webActionPayload)
-		if err != nil {
-			h.logger.ErrorContext(ctx, "failed to serialize web action", slog.String("error", err.Error()))
-			return h.createErrorResponse(http.StatusInternalServerError, "failed to serialize web action"), err
-		}
-		payloadStr = string(webActionJSON)
-	case models.MessageTypeNotification:
-		payloadStr = req.Payload
-	case models.MessageTypeScheduleCreation:
-		schedulePayload := models.NewSchedule(
-			req.Name, req.Arguments["schedule_expression"].(string),
-			req.Arguments["timezone"].(string), req.Arguments["target_type"].(string),
-		)
-		scheduleJSON, err := json.Marshal(schedulePayload)
+	// Serialize web action to JSON
+	err = req.Validate()
+	if err != nil {
+		h.logger.ErrorContext(ctx, "invalid request", slog.String("error", err.Error()))
+		return h.createErrorResponse(http.StatusInternalServerError, "invalid request"), err
 	}
 
-	// Create message
-	message := models.NewMessage("webapi", stage, messageType, payloadStr)
-
-	h.logger.DebugContext(ctx, "creating message",
-		slog.String("message_id", message.ID),
-		slog.String("type", message.MessageType.String()),
-	)
-
 	// Save to repository
-	err = h.repository.SaveMessage(ctx, message)
+	err = h.repository.SaveMessage(ctx, &req)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "failed to save message", slog.String("error", err.Error()))
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to save message"), err
 	}
 
 	// Mark as queued
-	message.MarkQueued()
-	err = h.repository.UpdateStatus(ctx, message.ID, message.Status, "")
+	req.MarkQueued()
+	err = h.repository.UpdateStatus(ctx, req.ID, req.Status, "")
 	if err != nil {
 		h.logger.ErrorContext(ctx, "failed to update message status", slog.String("error", err.Error()))
 	}
 
 	// Publish to SNS
-	err = h.publisher.PublishMessage(ctx, message)
+	err = h.publisher.PublishMessage(ctx, &req)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "failed to publish message", slog.String("error", err.Error()))
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to publish message"), err
 	}
 
-	body, err := json.Marshal(message)
+	body, err := json.Marshal(req)
 	if err != nil {
 		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal response"), err
 	}
@@ -323,79 +289,6 @@ func (h *WebAPIHandler) handleMetrics(ctx context.Context) (events.APIGatewayV2H
 
 	return events.APIGatewayV2HTTPResponse{
 		StatusCode: http.StatusOK,
-		Body:       string(body),
-	}, nil
-}
-
-// handleCreateSchedule creates a new dynamic schedule
-func (h *WebAPIHandler) handleCreateSchedule(ctx context.Context, request events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
-	var scheduleDef models.ScheduleDefinition
-	err := json.Unmarshal([]byte(request.Body), &scheduleDef)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to parse schedule request body", slog.String("error", err.Error()))
-		return h.createErrorResponse(http.StatusBadRequest, "invalid request body"), err
-	}
-
-	h.logger.InfoContext(ctx, "received schedule creation request",
-		slog.String("name", scheduleDef.Name),
-		slog.String("expression", scheduleDef.ScheduleExpression),
-		slog.String("target_type", scheduleDef.TargetType),
-	)
-
-	// Validate schedule definition
-	if err := scheduleDef.Validate(); err != nil {
-		h.logger.ErrorContext(ctx, "invalid schedule definition", slog.String("error", err.Error()))
-		return h.createErrorResponse(http.StatusBadRequest, fmt.Sprintf("invalid schedule: %s", err.Error())), nil
-	}
-
-	// Create schedule creation request
-	scheduleReq := models.ScheduleCreationRequest{
-		Action:   "create",
-		Schedule: scheduleDef,
-	}
-
-	// Publish to SNS schedule-creation topic
-	scheduleJSON, err := json.Marshal(scheduleReq)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to marshal schedule request", slog.String("error", err.Error()))
-		return h.createErrorResponse(http.StatusInternalServerError, "failed to process schedule request"), err
-	}
-
-	// Create a temporary message for SNS publishing
-	// We use the schedule creation topic for schedule management
-	tempMessage := models.NewMessage("webapi", h.config.Stage, models.MessageTypeScheduleCreation, string(scheduleJSON))
-
-	// Publish to schedule creation topic
-	err = h.publisher.PublishMessage(ctx, tempMessage)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "failed to publish schedule request", slog.String("error", err.Error()))
-		return h.createErrorResponse(http.StatusInternalServerError, "failed to publish schedule request"), err
-	}
-
-	// Return 202 Accepted response with schedule info
-	response := map[string]interface{}{
-		"status":  "accepted",
-		"message": "schedule creation request submitted",
-		"schedule": map[string]interface{}{
-			"name":                scheduleDef.Name,
-			"schedule_expression": scheduleDef.ScheduleExpression,
-			"timezone":            scheduleDef.Timezone,
-			"target_type":         scheduleDef.TargetType,
-			"description":         scheduleDef.Description,
-		},
-	}
-
-	body, err := json.Marshal(response)
-	if err != nil {
-		return h.createErrorResponse(http.StatusInternalServerError, "failed to marshal response"), err
-	}
-
-	h.logger.InfoContext(ctx, "schedule creation request accepted",
-		slog.String("name", scheduleDef.Name),
-	)
-
-	return events.APIGatewayV2HTTPResponse{
-		StatusCode: http.StatusAccepted,
 		Body:       string(body),
 	}, nil
 }

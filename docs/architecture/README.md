@@ -1,379 +1,699 @@
-# rez_agent Architecture Documentation
+# Architecture Documentation
 
-## Overview
+## Table of Contents
 
-This directory contains the complete backend service architecture design for the rez_agent event-driven messaging system. The architecture is designed for a Go-based serverless application running on AWS Lambda, processing scheduled and manual messages with delivery to ntfy.sh.
+1. [System Overview](#system-overview)
+2. [Architecture Patterns](#architecture-patterns)
+3. [Component Diagram](#component-diagram)
+4. [Data Flow](#data-flow)
+5. [Lambda Functions](#lambda-functions)
+6. [Messaging Architecture](#messaging-architecture)
+7. [Data Storage](#data-storage)
+8. [Security Architecture](#security-architecture)
+9. [Scaling and Performance](#scaling-and-performance)
 
-## Architecture Documents
+## System Overview
 
-### 1. [Service Architecture](./service-architecture.md)
-**Purpose**: Defines the overall system architecture, service boundaries, and component interactions.
+rez_agent is a serverless, event-driven automation platform built entirely on AWS managed services. The architecture follows microservices principles with decoupled components communicating asynchronously via SNS/SQS.
 
-**Contents**:
-- System architecture diagram (ASCII)
-- Service boundary definitions (4 Lambda functions)
-- Message flow and communication patterns
-- Technology decisions (DynamoDB vs RDS, Cognito vs Auth0)
-- Deployment strategy and scalability considerations
-- Future extensibility patterns
+### Design Principles
 
-**Key Components**:
-- Scheduler Service (EventBridge → Lambda)
-- Web API Service (API Gateway → Lambda)
-- Message Processor Service (SQS → Lambda)
-- Notification Service (Lambda → ntfy.sh)
+- **Serverless-First**: No servers to manage, automatic scaling
+- **Event-Driven**: Components react to events rather than polling
+- **Loosely Coupled**: Components communicate via message queues
+- **Single Responsibility**: Each Lambda function has one clear purpose
+- **Fail-Safe**: Automatic retries, dead letter queues, error handling
+- **Observable**: Structured logging, metrics, and optional X-Ray tracing
 
-**Start here** to understand the overall system design and how components interact.
+## Architecture Patterns
 
----
+### 1. Pub/Sub Pattern (SNS/SQS)
 
-### 2. [Data Model](./data-model.md)
-**Purpose**: Defines the data storage strategy, table schema, and access patterns.
+```
+┌──────────┐
+│ Producer │
+└─────┬────┘
+      │ publish
+      ▼
+┌──────────────┐
+│  SNS Topic   │
+└──┬────────┬──┘
+   │        │ subscribe
+   ▼        ▼
+┌─────┐  ┌─────┐
+│ SQS │  │ SQS │
+└──┬──┘  └──┬──┘
+   │        │
+   ▼        ▼
+┌──────┐ ┌──────┐
+│Lambda│ │Lambda│
+└──────┘ └──────┘
+```
 
-**Contents**:
-- DynamoDB table design (messages table)
-- Primary key and GSI design (stage-created_date, status-created_date)
-- Message status state machine (created → processing → completed/failed)
-- Message payload schemas by message_type
-- Data retention strategy (90-day TTL)
-- Access patterns and query examples (Go SDK v2)
-- Performance optimization (pagination, batch operations, conditional writes)
+**Benefits**:
+- Decouples producers from consumers
+- Enables fanout (one message to multiple consumers)
+- Automatic retry with exponential backoff
+- Dead letter queue for failed messages
 
-**Key Decisions**:
-- DynamoDB (serverless-native, auto-scaling, no connection pooling)
-- On-demand capacity mode (variable workload)
-- TTL for automatic cleanup (90 days)
+### 2. Message Routing Pattern
 
-**Read this** after understanding service architecture, before implementing data access layer.
+```
+┌────────────┐
+│ Web API    │
+└─────┬──────┘
+      │
+      ▼
+┌─────────────────────┐
+│ Topic Router        │
+│ (based on msg type) │
+└─┬─────┬──────┬──────┘
+  │     │      │
+  ▼     ▼      ▼
+ SNS1  SNS2   SNS3
+  │     │      │
+  ▼     ▼      ▼
+WebAct Agent  Sched
+```
 
----
+Messages are routed to different SNS topics based on `message_type`:
+- `web_action` → Web Actions Topic
+- `agent_response` → Agent Response Topic
+- `schedule_creation` → Schedule Creation Topic
+- `notify` → Notifications Topic
 
-### 3. [OpenAPI Specification](../api/openapi.yaml)
-**Purpose**: REST API contract for the Web API Lambda function.
+### 3. Repository Pattern
 
-**Contents**:
-- Complete OpenAPI 3.0 specification
-- All endpoints with request/response schemas
-- Authentication flow (OAuth 2.0)
-- Error response formats
-- Example requests and responses
+```go
+// Repository interface
+type MessageRepository interface {
+    SaveMessage(ctx context.Context, message *Message) error
+    GetMessage(ctx context.Context, id string) (*Message, error)
+}
+
+// DynamoDB implementation
+type DynamoDBRepository struct {
+    client *dynamodb.Client
+    table  string
+}
+```
+
+**Benefits**:
+- Abstracts data access layer
+- Enables testing with mock repositories
+- Allows switching storage backends
+
+### 4. Handler Registry Pattern
+
+```go
+// Handler interface
+type WebActionHandler interface {
+    GetActionType() WebActionType
+    Execute(ctx context.Context, args map[string]interface{},
+            payload *WebActionPayload) ([]string, error)
+}
+
+// Registry
+type HandlerRegistry struct {
+    handlers map[WebActionType]WebActionHandler
+}
+```
+
+**Benefits**:
+- Easy to add new action types
+- Clean separation of concerns
+- Testable in isolation
+
+## Component Diagram
+
+```mermaid
+graph TB
+    subgraph "External Triggers"
+        EB[EventBridge Scheduler]
+        API[API Gateway HTTP API]
+        MCP[MCP Client/Claude]
+    end
+
+    subgraph "SNS Topics"
+        SNS1[Web Actions Topic]
+        SNS2[Notifications Topic]
+        SNS3[Agent Response Topic]
+        SNS4[Schedule Creation Topic]
+    end
+
+    subgraph "SQS Queues"
+        Q1[Web Actions Queue]
+        Q2[Notifications Queue]
+    end
+
+    subgraph "Lambda Functions"
+        SCHED[Scheduler Lambda]
+        PROC[Processor Lambda]
+        WEB[WebAction Lambda]
+        API_L[WebAPI Lambda]
+        AGENT[AI Agent Lambda]
+        MCP_L[MCP Server Lambda]
+    end
+
+    subgraph "Data Stores"
+        DDB1[(Messages Table)]
+        DDB2[(Schedules Table)]
+        DDB3[(Web Action Results)]
+        SM[Secrets Manager]
+    end
+
+    subgraph "External Services"
+        NTFY[ntfy.sh]
+        WEATHER[NOAA Weather API]
+        GOLF[Golf Course APIs]
+    end
+
+    EB -->|trigger| SCHED
+    API -->|HTTP| API_L
+    MCP -->|Lambda URL| MCP_L
+
+    SCHED --> SNS1
+    SCHED --> SNS2
+    API_L --> SNS1
+    API_L --> SNS4
+    MCP_L --> SNS1
+
+    SNS1 --> Q1
+    SNS2 --> Q2
+
+    Q1 -->|poll| WEB
+    Q2 -->|poll| PROC
+
+    PROC --> NTFY
+    WEB --> WEATHER
+    WEB --> GOLF
+    WEB --> SM
+
+    SCHED --> DDB1
+    API_L --> DDB1
+    API_L --> DDB2
+    WEB --> DDB3
+    PROC --> DDB1
+```
+
+## Data Flow
+
+### 1. Scheduled Task Flow
+
+```
+EventBridge Scheduler (cron trigger)
+    ↓
+Scheduler Lambda
+    ↓
+Create Message (DynamoDB)
+    ↓
+Publish to SNS Topic (based on task type)
+    ↓
+SQS Queue
+    ↓
+Processor/WebAction Lambda
+    ↓
+Execute Task
+    ↓
+Update Message Status (DynamoDB)
+    ↓
+Publish Notification
+    ↓
+ntfy.sh
+```
+
+### 2. Web Action Flow
+
+```
+API Gateway HTTP API
+    ↓
+WebAPI Lambda
+    ↓
+Validate Request
+    ↓
+Create Message (DynamoDB)
+    ↓
+Publish to Web Actions Topic (SNS)
+    ↓
+Web Actions Queue (SQS)
+    ↓
+WebAction Lambda (triggered by SQS)
+    ↓
+Get OAuth Token (Secrets Manager)
+    ↓
+Execute HTTP Request (external API)
+    ↓
+Save Result (DynamoDB)
+    ↓
+Publish Notification (SNS)
+    ↓
+ntfy.sh
+```
+
+### 3. AI Agent Flow (MCP)
+
+```
+Claude Desktop (via MCP Client)
+    ↓
+MCP Server Lambda (Lambda URL)
+    ↓
+Parse MCP Tool Request
+    ↓
+Create Message (DynamoDB)
+    ↓
+Publish to Web Actions Topic (SNS)
+    ↓
+Web Actions Queue (SQS)
+    ↓
+WebAction Lambda
+    ↓
+Execute Action (Golf/Weather API)
+    ↓
+Return Result to MCP Server
+    ↓
+MCP Server responds to Claude
+```
+
+### 4. Dynamic Schedule Creation Flow
+
+```
+API Gateway HTTP API
+    ↓
+WebAPI Lambda
+    ↓
+Validate Schedule Request
+    ↓
+Create Message (DynamoDB)
+    ↓
+Publish to Schedule Creation Topic (SNS)
+    ↓
+Scheduler Lambda (subscribed to topic)
+    ↓
+Create EventBridge Schedule
+    ↓
+Save Schedule Metadata (DynamoDB)
+    ↓
+Publish Confirmation (SNS)
+```
+
+## Lambda Functions
+
+### Scheduler Lambda
+
+**Purpose**: Process EventBridge schedule triggers and create tasks
+
+**Triggers**: EventBridge Scheduler (cron expressions)
+
+**Responsibilities**:
+- Create scheduled messages
+- Publish to appropriate SNS topics
+- Handle schedule creation requests
+
+**Key Code**: `cmd/scheduler/main.go`
+
+### Processor Lambda
+
+**Purpose**: Process notification messages and send to ntfy.sh
+
+**Triggers**: SQS (Notifications Queue)
+
+**Responsibilities**:
+- Poll notification queue
+- Send push notifications
+- Update message status
+
+**Key Code**: `cmd/processor/main.go`
+
+### WebAction Lambda
+
+**Purpose**: Execute HTTP REST API calls with OAuth authentication
+
+**Triggers**: SQS (Web Actions Queue)
+
+**Responsibilities**:
+- OAuth 2.0 authentication
+- JWT verification
+- HTTP request execution
+- Weather API integration
+- Golf course API integration
+
+**Key Code**: `cmd/webaction/main.go`
+
+**Handlers**:
+- `WeatherHandler`: NOAA Weather API
+- `GolfHandler`: Golf course reservation APIs
+
+### WebAPI Lambda
+
+**Purpose**: HTTP API for message and schedule management
+
+**Triggers**: API Gateway HTTP API
+
+**Responsibilities**:
+- Message creation
+- Schedule creation
+- Message routing to SNS topics
+
+**Key Code**: `cmd/webapi/main.go`
 
 **Endpoints**:
-- `GET /api/messages` - List messages with filtering/pagination
-- `POST /api/messages` - Create manual message
-- `GET /api/messages/{id}` - Get message by ID
-- `GET /api/metrics` - Dashboard metrics
-- `POST /api/auth/login` - OAuth login initiation
-- `GET /api/auth/callback` - OAuth callback
-- `POST /api/auth/refresh` - Token refresh
-- `GET /api/health` - Health check
-
-**Use this** to implement the Web API Lambda handler and generate API documentation.
-
----
-
-### 4. [Message Schemas](./message-schemas.md)
-**Purpose**: Defines SNS and SQS message formats for inter-service communication.
-
-**Contents**:
-- SNS message schema (published by Scheduler/Web API)
-- SQS message schema (consumed by Message Processor)
-- Go struct definitions for message parsing
-- Message processing flow examples
-- Idempotency and deduplication strategies
-- Schema versioning approach
-
-**Key Decisions**:
-- Minimal payload (only message_id, not full data)
-- Single source of truth (DynamoDB for message data)
-- Correlation ID for distributed tracing
-
-**Read this** when implementing message publishing (SNS) and consumption (SQS).
-
----
-
-### 5. [Authentication & Authorization](./authentication-authorization.md)
-**Purpose**: Security model for user and service-to-service authentication.
-
-**Contents**:
-- OAuth 2.0 authorization code flow (AWS Cognito)
-- JWT token structure and validation
-- Lambda Authorizer implementation (Go)
-- Service-to-service authentication (IAM roles)
-- IAM policies for least-privilege access
-- Secrets management (Parameter Store)
-- Future RBAC enhancement design
-
-**Key Components**:
-- AWS Cognito User Pool (user authentication)
-- Lambda Authorizer (JWT validation)
-- IAM roles per Lambda function
-- Parameter Store for API keys
-
-**Read this** before implementing authentication flows and API Gateway integration.
-
----
-
-### 6. [Error Handling & Resilience](./error-handling-resilience.md)
-**Purpose**: Strategies for handling errors and building resilience.
-
-**Contents**:
-- Error categories (transient, permanent, validation, system)
-- Retry strategy (exponential backoff with jitter)
-- Circuit breaker pattern (DynamoDB-backed state)
-- Timeout management (Lambda and HTTP clients)
-- SQS Dead Letter Queue configuration
-- Idempotency patterns (conditional DynamoDB updates)
-- Graceful degradation strategies
-- Partial batch failures (SQS)
-
-**Key Patterns**:
-- Exponential backoff: 1s → 2s → 4s (3 retries)
-- Circuit breaker: 5 failures in 1 minute → open (30s timeout)
-- DLQ: After 3 retries → manual investigation
-
-**Read this** when implementing error handling in Lambda functions.
-
----
-
-### 7. [Observability & Monitoring](./observability-monitoring.md)
-**Purpose**: Logging, metrics, tracing, and alerting strategy.
-
-**Contents**:
-- Structured logging with Go `log/slog` (JSON format)
-- Correlation ID propagation (across all services)
-- CloudWatch Logs configuration (retention, queries)
-- Custom CloudWatch metrics (messages processed, notification duration)
-- Distributed tracing with AWS X-Ray (trace examples)
-- CloudWatch alarms (DLQ, errors, latency, circuit breaker)
-- Dashboard design (overview, service-specific)
-- SLI/SLO definitions (availability, latency, success rate)
-
-**Key Metrics**:
-- Messages created, processed, failed
-- Notification success rate
-- API response time (p95, p99)
-- Circuit breaker state
-
-**Read this** when implementing logging, metrics, and setting up monitoring.
-
----
-
-### 8. [Configuration Management](./configuration-management.md)
-**Purpose**: How to manage configuration across environments.
-
-**Contents**:
-- Environment variables (Lambda configuration)
-- AWS Systems Manager Parameter Store (secrets, shared config)
-- DynamoDB dynamic configuration (feature flags)
-- Go configuration loading patterns
-- Parameter caching strategies (reduce API calls)
-- Per-environment configuration (dev, stage, prod)
-- Configuration validation (pre-deployment, runtime)
-- Secrets rotation process
-
-**Key Decisions**:
-- Environment variables: Non-sensitive config (table names, ARNs)
-- Parameter Store: Secrets (API keys) with KMS encryption
-- Caching: 5-minute TTL in Lambda globals
-
-**Read this** when setting up infrastructure and deploying Lambda functions.
-
----
-
-## Implementation Roadmap
-
-### Phase 1: Foundation (Week 1-2)
-1. **Infrastructure Setup**:
-   - Create DynamoDB table (messages, circuit-breaker)
-   - Create SNS topic, SQS queue (with DLQ)
-   - Set up AWS Cognito User Pool
-   - Configure Parameter Store parameters
-
-2. **Scheduler Lambda**:
-   - Implement message creation logic
-   - Publish to SNS topic
-   - Configure EventBridge rule (24-hour cron)
-
-3. **Message Processor Lambda**:
-   - Implement SQS event handler
-   - Status update logic (DynamoDB)
-   - Partial batch failure handling
-
-4. **Notification Service Lambda**:
-   - HTTP client for ntfy.sh
-   - Basic retry logic (exponential backoff)
-   - Error handling
-
-**Deliverable**: Scheduled "hello world" messages sent to ntfy.sh every 24 hours
-
----
-
-### Phase 2: Web API (Week 3-4)
-1. **Lambda Authorizer**:
-   - JWT validation (Cognito JWKS)
-   - IAM policy generation
-
-2. **Web API Lambda**:
-   - Implement all endpoints (see OpenAPI spec)
-   - OAuth flow handlers (login, callback, refresh)
-   - DynamoDB query logic (list messages, metrics)
-   - Manual message creation
-
-3. **API Gateway**:
-   - Configure HTTP API
-   - Attach Lambda Authorizer
-   - CORS configuration
-
-**Deliverable**: Web API for frontend to view messages and create manual notifications
-
----
-
-### Phase 3: Resilience (Week 5)
-1. **Circuit Breaker**:
-   - DynamoDB-backed circuit breaker implementation
-   - State management (closed → open → half-open)
-   - Integration in Notification Service
-
-2. **Enhanced Error Handling**:
-   - Structured error responses
-   - DLQ monitoring alarm
-   - Idempotency improvements
-
-3. **Graceful Degradation**:
-   - Metrics caching (fallback for DynamoDB errors)
-   - Circuit breaker fallback logic
-
-**Deliverable**: System resilient to ntfy.sh outages and transient errors
-
----
-
-### Phase 4: Observability (Week 6)
-1. **Logging**:
-   - Implement structured logging (slog)
-   - Correlation ID propagation
-   - CloudWatch Logs Insights queries
-
-2. **Metrics**:
-   - Custom CloudWatch metrics (messages, notifications, duration)
-   - Metrics recording in all Lambdas
-
-3. **Tracing**:
-   - X-Ray SDK integration
-   - Trace annotations (correlation_id, message_id)
-
-4. **Monitoring**:
-   - CloudWatch alarms (DLQ, errors, latency)
-   - Dashboard creation
-   - Runbook documentation
-
-**Deliverable**: Full observability stack with proactive alerting
-
----
-
-### Phase 5: Frontend & Polish (Week 7-8)
-1. **Frontend**:
-   - React/Next.js dashboard
-   - OAuth integration
-   - Message list, metrics display
-   - Manual message creation form
-
-2. **Documentation**:
-   - API documentation (from OpenAPI spec)
-   - Deployment guide
-   - Runbooks for common issues
-
-3. **Testing**:
-   - Unit tests (Go)
-   - Integration tests (LocalStack or AWS)
-   - E2E tests (frontend + backend)
-
-**Deliverable**: Production-ready system with web interface
-
----
-
-## Technology Stack Summary
-
-### Core Infrastructure
-- **Compute**: AWS Lambda (Go 1.24)
-- **API Gateway**: AWS HTTP API
-- **Messaging**: SNS (pub/sub), SQS (queue with DLQ)
-- **Database**: DynamoDB (on-demand, TTL enabled)
-- **Scheduling**: EventBridge (cron rules)
-- **Authentication**: AWS Cognito (OAuth 2.0, JWT)
-
-### Configuration & Secrets
-- **Configuration**: Environment variables, Parameter Store
-- **Secrets**: Parameter Store (SecureString, KMS encrypted)
-
-### Observability
-- **Logging**: CloudWatch Logs, Go `log/slog` (JSON)
-- **Metrics**: CloudWatch Metrics (built-in + custom)
-- **Tracing**: AWS X-Ray
-- **Alerting**: CloudWatch Alarms → SNS
-
-### Development & Deployment
-- **IaC**: AWS CDK (Go) or Terraform
-- **CI/CD**: GitHub Actions (or AWS CodePipeline)
-- **Deployment**: Blue-green with Lambda aliases
-
-### External Services
-- **Notifications**: ntfy.sh (push notification API)
-
----
-
-## Design Principles Recap
-
-1. **Event-driven**: SNS/SQS decouples services, allows async processing
-2. **Serverless**: No infrastructure management, auto-scaling, pay-per-use
-3. **Resilient**: Retries, circuit breakers, DLQ, graceful degradation
-4. **Observable**: Structured logs, metrics, distributed tracing, correlation IDs
-5. **Secure**: OAuth 2.0, JWT, IAM roles, encrypted secrets, least-privilege
-6. **Extensible**: Generic message schema, pluggable notification services, feature flags
-7. **Cost-optimized**: On-demand capacity, log retention policies, X-Ray sampling
-8. **Testable**: Clear service boundaries, dependency injection, unit/integration tests
-
----
-
-## Next Steps
-
-1. **Review all architecture documents** in this directory (start with service-architecture.md)
-2. **Set up AWS account** and configure IAM roles/policies
-3. **Create GitHub repository** for code (separate from docs)
-4. **Initialize Go project** with module structure:
-   ```
-   rez_agent/
-   ├── cmd/
-   │   ├── scheduler/
-   │   ├── web-api/
-   │   ├── message-processor/
-   │   ├── notification-service/
-   │   └── jwt-authorizer/
-   ├── internal/
-   │   ├── config/
-   │   ├── models/
-   │   ├── dynamodb/
-   │   ├── sns/
-   │   ├── ssm/
-   │   ├── circuitbreaker/
-   │   ├── retry/
-   │   └── correlation/
-   ├── docs/ (this directory)
-   ├── infra/ (CDK or Terraform)
-   └── go.mod
-   ```
-5. **Implement Phase 1** (Foundation) following the roadmap above
-6. **Deploy to dev environment** and test scheduled message flow
-7. **Iterate** through remaining phases
-
----
-
-## Questions or Clarifications?
-
-If any part of the architecture needs clarification or adjustment during implementation, refer back to the detailed design documents. Each document includes:
-- **Rationale**: Why decisions were made
-- **Trade-offs**: Alternatives considered
-- **Go code examples**: Implementation guidance
-- **AWS configuration**: Service settings and IAM policies
-
-Good luck with the implementation!
+- `POST /api/messages`: Create message
+- `POST /api/schedules`: Create/manage schedules
+
+### AI Agent Lambda
+
+**Purpose**: Anthropic Claude AI agent for intelligent automation
+
+**Triggers**: Agent Response Topic (SNS)
+
+**Responsibilities**:
+- Process AI agent responses
+- Natural language task understanding
+- Intelligent decision making
+
+**Key Code**: `cmd/agent/` (Python)
+
+### MCP Server Lambda
+
+**Purpose**: Model Context Protocol server for Claude integration
+
+**Triggers**: Lambda Function URL (HTTP)
+
+**Responsibilities**:
+- MCP protocol implementation
+- Tool execution (golf, weather, notifications)
+- Request/response handling
+
+**Key Code**: `cmd/mcp/main.go`
+
+**Available Tools**:
+- `golf_search_tee_times`
+- `golf_book_tee_time`
+- `golf_fetch_reservations`
+- `get_weather_forecast`
+- `send_notification`
+
+## Messaging Architecture
+
+### SNS Topics
+
+```
+┌───────────────────────────────────────┐
+│         SNS Topic Hierarchy           │
+├───────────────────────────────────────┤
+│                                       │
+│  Web Actions Topic                    │
+│    ├─ Web Actions Queue (SQS)        │
+│    └─ Subscriptions: WebAction Lambda│
+│                                       │
+│  Notifications Topic                  │
+│    ├─ Notifications Queue (SQS)      │
+│    └─ Subscriptions: Processor Lambda│
+│                                       │
+│  Agent Response Topic                 │
+│    ├─ Agent Queue (SQS)              │
+│    └─ Subscriptions: AI Agent Lambda │
+│                                       │
+│  Schedule Creation Topic              │
+│    └─ Subscriptions: Scheduler Lambda│
+│                                       │
+└───────────────────────────────────────┘
+```
+
+### Message Format
+
+All messages follow a standard schema:
+
+```json
+{
+  "id": "msg_20240115120000_123456",
+  "version": "1.0",
+  "created_date": "2024-01-15T12:00:00Z",
+  "created_by": "scheduler",
+  "stage": "prod",
+  "message_type": "web_action",
+  "status": "created",
+  "payload": {
+    "version": "1.0",
+    "action": "weather",
+    "url": "https://api.weather.gov/..."
+  },
+  "arguments": {},
+  "updated_date": "2024-01-15T12:00:00Z",
+  "retry_count": 0
+}
+```
+
+### SQS Configuration
+
+- **Visibility Timeout**: 6 minutes (2x Lambda timeout)
+- **Message Retention**: 4 days
+- **Maximum Receives**: 3 attempts
+- **Dead Letter Queue**: Yes, for failed messages
+- **Batch Size**: 10 messages per Lambda invocation
+
+## Data Storage
+
+### DynamoDB Tables
+
+#### Messages Table
+
+**Table Name**: `rez-agent-messages-{stage}`
+
+**Partition Key**: `id` (String)
+
+**Attributes**:
+- `id`: Message ID
+- `version`: Schema version
+- `created_date`: Timestamp
+- `created_by`: Creator identifier
+- `stage`: Environment
+- `message_type`: Type of message
+- `status`: Processing status
+- `payload`: Message content
+- `arguments`: Additional parameters
+- `updated_date`: Last update timestamp
+- `retry_count`: Number of retries
+
+**TTL**: Not enabled (messages are kept indefinitely)
+
+#### Schedules Table
+
+**Table Name**: `rez-agent-schedules-{stage}`
+
+**Partition Key**: `id` (String)
+
+**Attributes**:
+- `id`: Schedule ID
+- `name`: Schedule name
+- `schedule_arn`: EventBridge Schedule ARN
+- `schedule_expression`: Cron/rate expression
+- `timezone`: Schedule timezone
+- `target_type`: Target Lambda function
+- `message_type`: Type of message to create
+- `payload`: Message payload template
+- `created_date`: Creation timestamp
+- `updated_date`: Last update timestamp
+- `status`: Active/Inactive
+
+#### Web Action Results Table
+
+**Table Name**: `rez-agent-web-action-results-{stage}`
+
+**Partition Key**: `id` (String)
+
+**Attributes**:
+- `id`: Result ID
+- `message_id`: Parent message ID
+- `action`: Action type
+- `url`: Target URL
+- `status`: Success/Failed
+- `response_code`: HTTP status code
+- `response_body`: Response (truncated to 50KB)
+- `error_message`: Error details
+- `execution_time_ms`: Duration in milliseconds
+- `created_date`: Timestamp
+
+**TTL**: 3 days (auto-deletion)
+
+### Secrets Manager
+
+**Secret Names**:
+- `rez-agent/golf/credentials-{stage}`: Golf course OAuth credentials
+
+**Secret Format**:
+```json
+{
+  "username": "user@example.com",
+  "password": "password123",
+  "client_id": "optional-client-id"
+}
+```
+
+## Security Architecture
+
+### IAM Roles and Policies
+
+Each Lambda function has its own execution role with least-privilege permissions:
+
+```
+┌────────────────────────────────────────┐
+│ Scheduler Lambda Role                  │
+├────────────────────────────────────────┤
+│ - DynamoDB: PutItem (Messages)         │
+│ - SNS: Publish (all topics)            │
+│ - EventBridge: CreateSchedule          │
+│ - CloudWatch: Logs                     │
+└────────────────────────────────────────┘
+
+┌────────────────────────────────────────┐
+│ WebAction Lambda Role                  │
+├────────────────────────────────────────┤
+│ - DynamoDB: GetItem, PutItem, UpdateItem│
+│ - SNS: Publish (Notifications)         │
+│ - Secrets Manager: GetSecretValue      │
+│ - SQS: ReceiveMessage, DeleteMessage   │
+│ - CloudWatch: Logs                     │
+└────────────────────────────────────────┘
+
+┌────────────────────────────────────────┐
+│ WebAPI Lambda Role                     │
+├────────────────────────────────────────┤
+│ - DynamoDB: PutItem, GetItem           │
+│ - SNS: Publish (all topics)            │
+│ - CloudWatch: Logs                     │
+└────────────────────────────────────────┘
+```
+
+### Network Security
+
+- **No VPC**: Lambda functions run in AWS-managed VPC
+- **HTTPS Only**: All external API calls require HTTPS
+- **SSRF Protection**: URL allowlist, hostname validation
+- **Private IP Blocking**: Prevents access to internal resources
+
+### Data Encryption
+
+- **In Transit**: TLS 1.2+ for all communications
+- **At Rest**:
+  - DynamoDB: Encrypted with AWS managed keys
+  - SNS/SQS: Encrypted with AWS managed keys
+  - Secrets Manager: Encrypted with AWS managed keys
+
+### Authentication Flow
+
+```
+┌─────────────┐
+│ Web Action  │
+│   Lambda    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────┐
+│ Secrets Manager │ Get credentials
+│  (OAuth creds)  │
+└──────┬──────────┘
+       │
+       ▼
+┌─────────────────┐
+│  OAuth Token    │ POST /token
+│   Endpoint      │ (username/password grant)
+└──────┬──────────┘
+       │
+       ▼
+┌─────────────────┐
+│  Access Token   │
+│   + JWT Claims  │
+└──────┬──────────┘
+       │
+       ▼
+┌─────────────────┐
+│  JWKS Endpoint  │ Fetch public keys
+└──────┬──────────┘
+       │
+       ▼
+┌─────────────────┐
+│ Verify JWT      │ Signature + Claims
+│  Signature      │
+└──────┬──────────┘
+       │
+       ▼
+┌─────────────────┐
+│  Execute API    │ With Bearer token
+│     Request     │
+└─────────────────┘
+```
+
+## Scaling and Performance
+
+### Auto-Scaling
+
+All components auto-scale automatically:
+
+- **Lambda**: Concurrent executions (default: 1000)
+- **DynamoDB**: On-demand capacity mode
+- **SNS/SQS**: Unlimited throughput
+
+### Performance Characteristics
+
+| Component | Typical Latency | Max Throughput |
+|-----------|-----------------|----------------|
+| API Gateway | < 50ms | 10,000 req/s |
+| Lambda (cold start) | 1-3s | N/A |
+| Lambda (warm) | 10-100ms | 1000 concurrent |
+| DynamoDB | < 10ms | On-demand |
+| SNS Publish | < 50ms | Unlimited |
+| SQS Poll | < 1s | 3000 msg/s |
+
+### Optimization Strategies
+
+1. **Lambda Warming**: Keep functions warm via scheduled pings
+2. **Connection Pooling**: Reuse HTTP clients across invocations
+3. **Batch Processing**: Process SQS messages in batches of 10
+4. **Caching**: Cache JWKS public keys for 1 hour
+5. **Async Processing**: Use SNS/SQS for async operations
+
+### Cost Optimization
+
+- **Lambda**: 128MB-512MB memory (tuned per function)
+- **DynamoDB**: On-demand capacity (pay-per-request)
+- **Logs**: 7-day retention (configurable)
+- **S3**: Lifecycle policies for deployment artifacts
+
+### Monitoring and Alerting
+
+**CloudWatch Metrics**:
+- Lambda invocations, errors, duration
+- SQS queue depth, age of oldest message
+- DynamoDB read/write capacity
+
+**CloudWatch Alarms**:
+- Lambda error rate > 5%
+- SQS queue depth > 100
+- Lambda throttles > 10
+
+**X-Ray Tracing** (optional):
+- End-to-end request tracing
+- Service map visualization
+- Performance bottleneck identification
+
+## Disaster Recovery
+
+### Backup Strategy
+
+- **DynamoDB**: Point-in-time recovery enabled
+- **Code**: All code in Git, deployed via Pulumi
+- **Infrastructure**: Defined as code, reproducible
+
+### Recovery Procedures
+
+1. **Lambda Failure**: Auto-retry via SQS, DLQ for manual inspection
+2. **Database Corruption**: Restore from point-in-time backup
+3. **Region Outage**: Deploy to alternate region (manual process)
+
+### High Availability
+
+- **Multi-AZ**: All AWS services are multi-AZ by default
+- **Failover**: Automatic for managed services
+- **RTO**: < 1 hour (manual redeployment to new region)
+- **RPO**: < 5 minutes (DynamoDB PITR)

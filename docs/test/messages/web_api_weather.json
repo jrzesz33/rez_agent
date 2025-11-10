@@ -1,12 +1,15 @@
 {
     "version": "1.0",
-    "url": "https://api.weather.gov/gridpoints/TOP/31,80/forecast",
-    "action": "weather",
     "arguments": {
-        "days": 2
+        "operation": "get_weather"
     },
-    "auth_config": {
-        "type": "none"
+    "payload": {
+        "courseID": 1,
+        "days": 2,
+        "action": "weather",
+        "auth_config": {
+            "type": "none"
+        }
     },
     "stage": "dev",
     "message_type": "web_action"

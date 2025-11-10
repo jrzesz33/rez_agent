@@ -171,7 +171,7 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 	}
 
 	// Execute web action
-	notificationMessage, err := h.executeWebAction(ctx, payload)
+	notificationMessage, err := h.executeWebAction(ctx, message.Arguments, payload)
 	executionTime := time.Since(startTime)
 
 	if err != nil {
@@ -201,7 +201,9 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 	// Publish notification messages
 	for i := range notificationMessage {
 		// Publish notification message
-		if err := h.publishNotification(ctx, message, notificationMessage[i]); err != nil {
+		_msgPayload := make(map[string]interface{})
+		_msgPayload["message"] = notificationMessage[i]
+		if err := h.publishNotification(ctx, message, _msgPayload); err != nil {
 			h.logger.Error("failed to publish notification",
 				slog.String("error", err.Error()),
 			)
@@ -219,7 +221,7 @@ func (h *Handler) processMessage(ctx context.Context, message *models.Message) e
 }
 
 // executeWebAction executes a web action using the appropriate handler
-func (h *Handler) executeWebAction(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
+func (h *Handler) executeWebAction(ctx context.Context, args map[string]interface{}, payload *models.WebActionPayload) ([]string, error) {
 	// Get handler for action type
 	handler, err := h.handlerRegistry.GetHandler(payload.Action)
 	if err != nil {
@@ -227,12 +229,12 @@ func (h *Handler) executeWebAction(ctx context.Context, payload *models.WebActio
 	}
 
 	// Execute action
-	return handler.Execute(ctx, payload)
+	return handler.Execute(ctx, args, payload)
 }
 
 // publishNotification publishes a notification message to SNS
 // If the original message was created by the AI agent, route response to agent topic
-func (h *Handler) publishNotification(ctx context.Context, originalMessage *models.Message, notificationContent string) error {
+func (h *Handler) publishNotification(ctx context.Context, originalMessage *models.Message, notificationContent map[string]interface{}) error {
 	// Check if message was created by AI agent
 	isAgentMessage := originalMessage.CreatedBy == "ai-agent"
 
@@ -241,7 +243,7 @@ func (h *Handler) publishNotification(ctx context.Context, originalMessage *mode
 	if isAgentMessage {
 		// For agent-created messages, send response back to agent topic
 		notificationMsg = models.NewMessage(
-			"web-action-processor",
+			"web-action-processor", nil, "1.0",
 			originalMessage.Stage,
 			models.MessageTypeAgentResponse,
 			notificationContent,
@@ -254,7 +256,7 @@ func (h *Handler) publishNotification(ctx context.Context, originalMessage *mode
 	} else {
 		// For non-agent messages, use normal notification routing
 		notificationMsg = models.NewMessage(
-			"web-action-processor",
+			"web-action-processor", nil, "1.0",
 			originalMessage.Stage,
 			models.MessageTypeNotification,
 			notificationContent,

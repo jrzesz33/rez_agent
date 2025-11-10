@@ -14,6 +14,7 @@ import (
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/models"
 	"github.com/jrzesz33/rez_agent/internal/secrets"
+	"github.com/jrzesz33/rez_agent/pkg/courses"
 )
 
 // GolfHandler handles golf reservation actions
@@ -40,28 +41,53 @@ func (h *GolfHandler) GetActionType() models.WebActionType {
 }
 
 // Execute fetches golf reservations and formats notification
-func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayload) ([]string, error) {
+func (h *GolfHandler) Execute(ctx context.Context, args map[string]interface{}, payload *models.WebActionPayload) ([]string, error) {
 	h.logger.Debug("executing golf action:",
 		slog.Any("payload", payload),
 	)
 
-	// Validate authentication configuration
-	if payload.AuthConfig == nil || payload.AuthConfig.Type != models.AuthTypeOAuthPassword {
-		return nil, fmt.Errorf("golf action requires OAuth password authentication")
+	// Load course configuration
+	if payload.CourseID == 0 {
+		return nil, fmt.Errorf("courseID is required for golf actions")
 	}
 
-	// Perform OAuth authentication
-	tokenURL := payload.AuthConfig.TokenURL
-	secretName := payload.AuthConfig.SecretName
-	scope := payload.AuthConfig.Scope
+	course, err := courses.GetCourseByID(payload.CourseID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load course configuration: %w", err)
+	}
 
-	// Additional headers for OAuth request
+	h.logger.Debug("loaded course configuration",
+		slog.Int("course_id", course.CourseID),
+		slog.String("course_name", course.Name),
+		slog.String("origin", course.Origin),
+	)
+
+	// Get token URL from course configuration
+	tokenURL, err := course.GetActionURL("token-url")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token URL from course config: %w", err)
+	}
+
+	// Get JWKS URL from course configuration
+	jwksURL, err := course.GetActionURL("jwks-url")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get JWKS URL from course config: %w", err)
+	}
+
+	// Get secret name from course configuration
+	// For now, all courses use the same credentials
+	secretName := course.GetSecretName("prod")
+
+	// Get scope from course configuration
+	scope := course.Scope
+
+	// Additional headers for OAuth request - use course-specific values
 	oauthHeaders := map[string]string{
 		"accept":          "application/json, text/plain, */*",
 		"accept-language": "en-US,en;q=0.9",
 		"cache-control":   "no-cache, no-store, must-revalidate",
-		"client-id":       "onlineresweb",
-		"origin":          "https://birdsfoot.cps.golf",
+		"client-id":       course.ClientID,
+		"origin":          course.Origin,
 		"user-agent":      "Mozilla/5.0 (compatible; rez-agent/1.0)",
 	}
 
@@ -73,42 +99,46 @@ func (h *GolfHandler) Execute(ctx context.Context, payload *models.WebActionPayl
 
 	// Parse and verify JWT claims WITH signature verification (CRITICAL SECURITY FIX)
 	var claims *models.JWTClaims
-	if payload.AuthConfig.JWKSURL != "" {
-		claims, err = parseAndVerifyJWT(accessToken, payload.AuthConfig.JWKSURL)
-		if err != nil {
-			h.logger.Error("JWT verification failed", slog.String("error", err.Error()))
-			return nil, fmt.Errorf("authentication failed: %w", err)
-		}
-		h.logger.Debug("JWT verified successfully",
-			slog.String("golfer_id", claims.GolferID),
-			slog.String("acct", claims.Acct))
+	claims, err = parseAndVerifyJWT(accessToken, jwksURL)
+	if err != nil {
+		h.logger.Error("JWT verification failed", slog.String("error", err.Error()))
+		return nil, fmt.Errorf("authentication failed: %w", err)
 	}
+	h.logger.Debug("JWT verified successfully",
+		slog.String("golfer_id", claims.GolferID),
+		slog.String("acct", claims.Acct))
 
 	// Route based on operation type
-	operation, _ := payload.Arguments["operation"].(string)
+	operation, _ := args["operation"].(string)
 
 	switch operation {
 	case "search_tee_times":
-		return h.handleSearchTeeTimes(ctx, payload, accessToken, claims)
+		return h.handleSearchTeeTimes(ctx, course, payload, accessToken, claims)
 	case "book_tee_time":
 		if claims == nil {
 			return nil, fmt.Errorf("JWT verification required for booking operations")
 		}
-		return h.handleBookTeeTime(ctx, payload, accessToken, claims)
+		return h.handleBookTeeTime(ctx, course, payload, accessToken, claims)
 	case "fetch_reservations", "":
 		// Default to existing behavior
-		return h.handleFetchReservations(ctx, payload, accessToken)
+		return h.handleFetchReservations(ctx, course, accessToken)
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", operation)
 	}
 }
 
 // handleFetchReservations handles fetching upcoming reservations
-func (h *GolfHandler) handleFetchReservations(ctx context.Context, payload *models.WebActionPayload, accessToken string) ([]string, error) {
+func (h *GolfHandler) handleFetchReservations(ctx context.Context, course *courses.Course, accessToken string) ([]string, error) {
 	h.logger.Debug("fetching golf reservations")
 
+	// Get reservations URL from course configuration
+	reservationsURL, err := course.GetActionURL("get-reservations")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reservations URL from course config: %w", err)
+	}
+
 	// Fetch reservations
-	reservations, err := h.fetchReservations(ctx, payload.URL, accessToken)
+	reservations, err := h.fetchReservations(ctx, reservationsURL, accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch reservations: %w", err)
 	}
@@ -266,11 +296,11 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 }
 
 // handleSearchTeeTimes searches for available tee times
-func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.WebActionPayload, accessToken string, claims *models.JWTClaims) ([]string, error) {
+func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, course *courses.Course, payload *models.WebActionPayload, accessToken string, claims *models.JWTClaims) ([]string, error) {
 	h.logger.Debug("searching for tee times")
 
 	// Parse search parameters from payload.Arguments
-	params, err := h.parseSearchTeeTimesParams(payload.Arguments)
+	params, err := h.parseSearchTeeTimesParams(*payload)
 	if err != nil {
 		return nil, fmt.Errorf("invalid search parameters: %w", err)
 	}
@@ -281,7 +311,7 @@ func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.
 		slog.Bool("auto_book", params.AutoBook))
 
 	// Search for available tee times
-	teeTimeSlots, err := h.searchTeeTimes(ctx, accessToken, params)
+	teeTimeSlots, err := h.searchTeeTimes(ctx, course, accessToken, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search tee times: %w", err)
 	}
@@ -296,13 +326,9 @@ func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.
 
 		// Create a new payload for booking
 		bookPayload := *payload
-		bookPayload.Arguments = map[string]interface{}{
-			"teeSheetId":      teeTimeSlots[0].TeeSheetID,
-			"numberOfPlayer":  params.NumberOfPlayer,
-			"startSearchTime": params.StartSearchTime,
-		}
+		bookPayload.TeeSheetID = teeTimeSlots[0].TeeSheetID
 
-		return h.handleBookTeeTime(ctx, &bookPayload, accessToken, claims)
+		return h.handleBookTeeTime(ctx, course, &bookPayload, accessToken, claims)
 	}
 
 	// Format search results as notification
@@ -310,21 +336,21 @@ func (h *GolfHandler) handleSearchTeeTimes(ctx context.Context, payload *models.
 }
 
 // parseSearchTeeTimesParams parses search parameters from arguments
-func (h *GolfHandler) parseSearchTeeTimesParams(args map[string]interface{}) (*models.SearchTeeTimesParams, error) {
+func (h *GolfHandler) parseSearchTeeTimesParams(args models.WebActionPayload) (*models.SearchTeeTimesParams, error) {
 	params := &models.SearchTeeTimesParams{
 		NumberOfPlayer: 1, // Default
 		AutoBook:       false,
 	}
 
 	// Extract number of players (optional, default 1)
-	if numPlayers, ok := args["numberOfPlayer"].(float64); ok {
-		params.NumberOfPlayer = int(numPlayers)
+	if args.NumberOfPlayers > 1 {
+		params.NumberOfPlayer = int(args.NumberOfPlayers)
 	}
 
 	// Extract start time (optional)
-	if startTime, ok := args["startSearchTime"].(string); ok && startTime != "" {
-		params.StartSearchTime = &startTime
-		_searchDate, err := time.Parse("2006-01-02T15:04:05", startTime)
+	if args.StartSearchTime != "" {
+		params.StartSearchTime = &args.StartSearchTime
+		_searchDate, err := time.Parse("2006-01-02T15:04:05", args.StartSearchTime)
 		if err != nil {
 			return nil, fmt.Errorf("invalid startSearchTime format: %w", err)
 		}
@@ -335,16 +361,11 @@ func (h *GolfHandler) parseSearchTeeTimesParams(args map[string]interface{}) (*m
 	}
 
 	// Extract end time (optional)
-	if endTime, ok := args["endSearchTime"].(string); ok && endTime != "" {
-		params.EndSearchTime = &endTime
+	if args.EndSearchTime != "" {
+		params.EndSearchTime = &args.EndSearchTime
 	}
 
-	// Extract auto-book flag (optional)
-	if autoBook, ok := args["autoBook"].(bool); ok {
-		params.AutoBook = autoBook
-	} else {
-		h.logger.Debug("Auto Booking Not Requested")
-	}
+	params.AutoBook = args.AutoBook
 
 	// Validate number of players
 	if params.NumberOfPlayer < 1 || params.NumberOfPlayer > 4 {
@@ -355,20 +376,26 @@ func (h *GolfHandler) parseSearchTeeTimesParams(args map[string]interface{}) (*m
 }
 
 // searchTeeTimes searches for available tee times
-func (h *GolfHandler) searchTeeTimes(ctx context.Context, accessToken string, params *models.SearchTeeTimesParams) ([]models.TeeTimeSlot, error) {
+func (h *GolfHandler) searchTeeTimes(ctx context.Context, course *courses.Course, accessToken string, params *models.SearchTeeTimesParams) ([]models.TeeTimeSlot, error) {
+	// Get search URL from course configuration
+	baseURL, err := course.GetActionURL("search-tee-times")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get search URL from course config: %w", err)
+	}
+
 	// Build search URL with query parameters
-	baseURL := "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/TeeTimes"
-	searchURL := fmt.Sprintf("%s?searchDate=%s&holes=0&numberOfPlayer=%d&courseIds=1&searchTimeType=0&teeSheetSearchView=5&classCode=R&defaultOnlineRate=N&isUseCapacityPricing=false&memberStoreId=1&searchType=1",
+	searchURL := fmt.Sprintf("%s?searchDate=%s&holes=0&numberOfPlayer=%d&courseIds=%d&searchTimeType=0&teeSheetSearchView=5&classCode=R&defaultOnlineRate=N&isUseCapacityPricing=false&memberStoreId=1&searchType=1",
 		baseURL,
 		strings.ReplaceAll(params.SearchDate, " ", "%20"),
-		params.NumberOfPlayer)
+		params.NumberOfPlayer,
+		course.CourseID)
 
 	headers := map[string]string{
 		"accept":            "application/json, text/plain, */*",
 		"accept-language":   "en-US,en;q=0.9",
 		"authorization":     fmt.Sprintf("Bearer %s", accessToken),
 		"cache-control":     "no-cache, no-store, must-revalidate",
-		"client-id":         "onlineresweb",
+		"client-id":         course.ClientID,
 		"user-agent":        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
 		"x-componentid":     "1",
 		"x-timezone-offset": "240",
@@ -473,11 +500,11 @@ func (h *GolfHandler) formatSearchResults(slots []models.TeeTimeSlot, params *mo
 }
 
 // handleBookTeeTime books a tee time (3-step process)
-func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.WebActionPayload, accessToken string, claims *models.JWTClaims) ([]string, error) {
+func (h *GolfHandler) handleBookTeeTime(ctx context.Context, course *courses.Course, payload *models.WebActionPayload, accessToken string, claims *models.JWTClaims) ([]string, error) {
 	h.logger.Info("booking tee time")
 
 	// Parse booking parameters
-	params, err := h.parseBookTeeTimeParams(payload.Arguments)
+	params, err := h.parseBookTeeTimeParams(*payload)
 	if err != nil {
 		return nil, fmt.Errorf("invalid booking parameters: %w", err)
 	}
@@ -487,7 +514,7 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		slog.Int("num_players", params.NumberOfPlayer))
 
 	// Step 1: Lock tee time
-	lockResp, err := h.lockTeeTime(ctx, params, accessToken, claims)
+	lockResp, err := h.lockTeeTime(ctx, course, params, accessToken, claims)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lock tee time: %w", err)
 	}
@@ -500,7 +527,7 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		slog.String("session_id", lockResp.SessionID))
 
 	// Step 2: Calculate pricing
-	pricingResp, err := h.calculatePricing(ctx, params, accessToken, claims)
+	pricingResp, err := h.calculatePricing(ctx, course, params, accessToken, claims)
 	if err != nil {
 		// Lock will auto-expire server-side
 		return nil, fmt.Errorf("pricing calculation failed: %w", err)
@@ -514,7 +541,7 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 	time.Sleep(3 * time.Second)
 
 	// Step 3: Reserve tee time
-	reserveResp, err := h.reserveTeeTime(ctx, accessToken, claims, lockResp.SessionID, pricingResp.TransactionID)
+	reserveResp, err := h.reserveTeeTime(ctx, course, accessToken, claims, lockResp.SessionID, pricingResp.TransactionID)
 	if err != nil {
 		return nil, fmt.Errorf("reservation failed: %w", err)
 	}
@@ -524,32 +551,27 @@ func (h *GolfHandler) handleBookTeeTime(ctx context.Context, payload *models.Web
 		slog.String("confirmation_key", reserveResp.ConfirmationKey))
 
 	// Format success notification
-	return h.formatBookingSuccess(reserveResp, pricingResp), nil
+	return h.formatBookingSuccess(course, reserveResp, pricingResp), nil
 }
 
 // parseBookTeeTimeParams parses booking parameters from arguments
-func (h *GolfHandler) parseBookTeeTimeParams(args map[string]interface{}) (*models.BookTeeTimeParams, error) {
+func (h *GolfHandler) parseBookTeeTimeParams(args models.WebActionPayload) (*models.BookTeeTimeParams, error) {
 	params := &models.BookTeeTimeParams{
 		NumberOfPlayer: 1, // Default
 	}
 
 	// Extract teeSheetId (required)
 	// Handle both int and float64 (JSON unmarshals numbers as float64)
-	if teeSheetID, ok := args["teeSheetId"].(float64); ok {
-		params.TeeSheetID = int(teeSheetID)
-	} else if teeSheetID, ok := args["teeSheetId"].(int); ok {
-		params.TeeSheetID = teeSheetID
+	if args.TeeSheetID > 0 {
+		params.TeeSheetID = args.TeeSheetID
 	} else {
 		return nil, fmt.Errorf("teeSheetId is required")
 	}
 
 	// Extract number of players (optional, default 1)
 	// Handle both int and float64 (JSON unmarshals numbers as float64)
-	if numPlayers, ok := args["numberOfPlayer"].(float64); ok {
-		params.NumberOfPlayer = int(numPlayers)
-	} else if numPlayers, ok := args["numberOfPlayer"].(int); ok {
-		params.NumberOfPlayer = numPlayers
-	}
+
+	params.NumberOfPlayer = args.NumberOfPlayers
 
 	/*if startTime, ok := args["startSearchTime"].(string); ok && startTime != "" {
 		_searchDate, err := time.Parse("2006-01-02T15:04:05", startTime)
@@ -575,7 +597,7 @@ func (h *GolfHandler) parseBookTeeTimeParams(args map[string]interface{}) (*mode
 }
 
 // lockTeeTime performs step 1 of booking (lock)
-func (h *GolfHandler) lockTeeTime(ctx context.Context, params *models.BookTeeTimeParams, accessToken string, claims *models.JWTClaims) (*models.LockTeeTimeResponse, error) {
+func (h *GolfHandler) lockTeeTime(ctx context.Context, course *courses.Course, params *models.BookTeeTimeParams, accessToken string, claims *models.JWTClaims) (*models.LockTeeTimeResponse, error) {
 	sessionID := uuid.New().String() //time.Now().Format("20060102-150405")
 
 	_golferId, err := strconv.Atoi(claims.GolferID)
@@ -595,20 +617,26 @@ func (h *GolfHandler) lockTeeTime(ctx context.Context, params *models.BookTeeTim
 		IsGroupBooking: false,
 	}
 
+	// Get lock URL from course configuration
+	lockURL, err := course.GetActionURL("lock-tee-time")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get lock URL from course config: %w", err)
+	}
+
 	headers := map[string]string{
 		"accept":          "application/json, text/plain, */*",
 		"accept-language": "en-US,en;q=0.9",
 		"authorization":   fmt.Sprintf("Bearer %s", accessToken),
 		"cache-control":   "no-cache, no-store, must-revalidate",
-		"client-id":       "onlineresweb",
+		"client-id":       course.ClientID,
 		"content-type":    "application/json",
 		"x-componentid":   "1",
-		"x-websiteid":     "94fa26b7-2e63-4cbc-99e5-08d7d7f41522",
+		"x-websiteid":     course.WebsiteID,
 	}
 
 	resp, err := h.httpClient.Do(ctx, httpclient.RequestConfig{
 		Method:  "POST",
-		URL:     "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/LockTeeTimes",
+		URL:     lockURL,
 		Headers: headers,
 		Body:    lockReq,
 		Timeout: 30 * time.Second,
@@ -633,7 +661,7 @@ func (h *GolfHandler) lockTeeTime(ctx context.Context, params *models.BookTeeTim
 }
 
 // calculatePricing performs step 2 of booking (pricing)
-func (h *GolfHandler) calculatePricing(ctx context.Context, params *models.BookTeeTimeParams, accessToken string, claims *models.JWTClaims) (*models.PricingCalculationResponse, error) {
+func (h *GolfHandler) calculatePricing(ctx context.Context, course *courses.Course, params *models.BookTeeTimeParams, accessToken string, claims *models.JWTClaims) (*models.PricingCalculationResponse, error) {
 	_golferId, err := strconv.Atoi(claims.GolferID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid GolferID in claims: %w", err)
@@ -671,15 +699,21 @@ func (h *GolfHandler) calculatePricing(ctx context.Context, params *models.BookT
 		TransactionID:        nil,
 	}
 
+	// Get pricing URL from course configuration
+	pricingURL, err := course.GetActionURL("price-calculation")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pricing URL from course config: %w", err)
+	}
+
 	headers := map[string]string{
 		"accept":            "application/json, text/plain, */*",
 		"accept-language":   "en-US,en;q=0.9",
 		"authorization":     fmt.Sprintf("Bearer %s", accessToken),
 		"cache-control":     "no-cache, no-store, must-revalidate",
-		"client-id":         "onlineresweb",
+		"client-id":         course.ClientID,
 		"content-type":      "application/json",
 		"x-componentid":     "1",
-		"x-websiteid":       "94fa26b7-2e63-4cbc-99e5-08d7d7f41522",
+		"x-websiteid":       course.WebsiteID,
 		"x-ismobile":        "true",
 		"x-moduleid":        "7",
 		"x-productid":       "1",
@@ -688,14 +722,14 @@ func (h *GolfHandler) calculatePricing(ctx context.Context, params *models.BookT
 		"x-timezone-offset": "240",
 		"x-timezoneid":      "America/New_York",
 		"if-modified-since": "0",
-		"origin":            "https://birdsfoot.cps.golf",
+		"origin":            course.Origin,
 		"pragma":            "no-cache",
 		"priority":          "u=1, i",
 	}
 
 	resp, err := h.httpClient.Do(ctx, httpclient.RequestConfig{
 		Method:  "POST",
-		URL:     "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/TeeTimePricesCalculation",
+		URL:     pricingURL,
 		Headers: headers,
 		Body:    pricingReq,
 		Timeout: 30 * time.Second,
@@ -714,10 +748,30 @@ func (h *GolfHandler) calculatePricing(ctx context.Context, params *models.BookT
 }
 
 // reserveTeeTime performs step 3 of booking (reserve)
-func (h *GolfHandler) reserveTeeTime(ctx context.Context, accessToken string, claims *models.JWTClaims, sessionID, transactionID string) (*models.ReservationResponse, error) {
+func (h *GolfHandler) reserveTeeTime(ctx context.Context, course *courses.Course, accessToken string, claims *models.JWTClaims, sessionID, transactionID string) (*models.ReservationResponse, error) {
+	// Get book URL from course configuration
+	bookURL, err := course.GetActionURL("book-tee-time")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get book URL from course config: %w", err)
+	}
+
+	// Get cancel and home page URLs from course action configuration
+	var cancelLink, homeLink string
+	for _, action := range course.Actions {
+		if action.Request.Name == "book-tee-time" {
+			if action.Request.CancelReservationLink != "" {
+				cancelLink = course.Origin + action.Request.CancelReservationLink
+			}
+			if action.Request.HomePageLink != "" {
+				homeLink = course.Origin + action.Request.HomePageLink
+			}
+			break
+		}
+	}
+
 	reserveReq := models.ReserveTeeTimeRequest{
-		CancelReservationLink: "https://birdsfoot.cps.golf/onlineresweb/auth/verify-email?returnUrl=cancel-booking",
-		HomePageLink:          "https://birdsfoot.cps.golf/onlineresweb/",
+		CancelReservationLink: cancelLink,
+		HomePageLink:          homeLink,
 		AffiliateID:           nil,
 		FinalizeSaleModel: models.FinalizeSaleModel{
 			Acct:     claims.Acct,
@@ -745,12 +799,12 @@ func (h *GolfHandler) reserveTeeTime(ctx context.Context, accessToken string, cl
 		"accept-language":    "en-US,en;q=0.9",
 		"authorization":      fmt.Sprintf("Bearer %s", accessToken),
 		"cache-control":      "no-cache, no-store, must-revalidate",
-		"client-id":          "onlineresweb",
+		"client-id":          course.ClientID,
 		"content-type":       "application/json",
 		"x-componentid":      "1",
-		"x-websiteid":        "94fa26b7-2e63-4cbc-99e5-08d7d7f41522",
+		"x-websiteid":        course.WebsiteID,
 		"if-modified-since":  "0",
-		"origin":             "https://birdsfoot.cps.golf",
+		"origin":             course.Origin,
 		"pragma":             "no-cache",
 		"priority":           "u=1, i",
 		"sec-ch-ua-mobile":   "?0",
@@ -771,7 +825,7 @@ func (h *GolfHandler) reserveTeeTime(ctx context.Context, accessToken string, cl
 
 	resp, err := h.httpClient.Do(ctx, httpclient.RequestConfig{
 		Method:  "POST",
-		URL:     "https://birdsfoot.cps.golf/onlineres/onlineapi/api/v1/onlinereservation/ReserveTeeTimes",
+		URL:     bookURL,
 		Headers: headers,
 		Body:    reserveReq,
 		Timeout: 30 * time.Second,
@@ -795,11 +849,11 @@ func (h *GolfHandler) reserveTeeTime(ctx context.Context, accessToken string, cl
 }
 
 // formatBookingSuccess formats successful booking as notification
-func (h *GolfHandler) formatBookingSuccess(reserve *models.ReservationResponse, pricing *models.PricingCalculationResponse) []string {
+func (h *GolfHandler) formatBookingSuccess(course *courses.Course, reserve *models.ReservationResponse, pricing *models.PricingCalculationResponse) []string {
 	var sb strings.Builder
 	var strOut []string
 
-	sb.WriteString("⛳ Tee Time Booked Successfully!\n\n")
+	sb.WriteString(fmt.Sprintf("⛳ Tee Time Booked Successfully at %s!\n\n", course.Name))
 
 	// Confirmation details
 	sb.WriteString(fmt.Sprintf("Confirmation: %s\n", reserve.ConfirmationKey))

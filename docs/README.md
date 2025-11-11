@@ -12,6 +12,7 @@ Welcome to the rez_agent documentation. This directory contains comprehensive gu
 ### Technical Documentation
 - [Architecture](architecture/README.md) - System architecture and design patterns
 - [API Reference](api/README.md) - HTTP API endpoints and usage
+- [Sequence Diagrams](SEQUENCE_DIAGRAMS.md) - Mermaid diagrams showing system workflows
 - [Message Schemas](MESSAGE_SCHEMAS.md) - Message format specifications
 
 ### Additional Resources
@@ -25,6 +26,7 @@ docs/
 ├── README.md                    # This file
 ├── DEVELOPER_GUIDE.md          # Development workflow and practices
 ├── DEPLOYMENT_GUIDE.md         # Deployment procedures
+├── SEQUENCE_DIAGRAMS.md        # Mermaid workflow diagrams
 ├── MESSAGE_SCHEMAS.md          # Message format specifications
 ├── api/
 │   └── README.md              # API documentation
@@ -82,6 +84,27 @@ Deep dive into system architecture:
 - **Scaling and Performance**: Auto-scaling and optimization
 
 **Target Audience**: Architects and senior developers
+
+### [Sequence Diagrams](SEQUENCE_DIAGRAMS.md)
+
+Comprehensive Mermaid sequence diagrams illustrating system workflows:
+
+- **Message Processing Flow**: End-to-end message handling
+- **Web Action Execution**: External API interactions
+- **Golf Tee Time Booking**: Complete booking workflow with OAuth
+- **AI Agent Interaction (Legacy)**: SNS-based async tools
+- **AI Agent with MCP Integration**: New LangChain MCP Adapter flow
+- **Schedule Creation**: Dynamic EventBridge schedule setup
+- **EventBridge Scheduler Workflow**: Recurring task execution
+- **Authentication Flow**: OAuth 2.0 Password Grant with JWT
+- **Error Handling and DLQ**: Retry logic and dead letter queue
+- **MCP Server Tool Execution**: Model Context Protocol details
+- **API Gateway Request Flow**: HTTP request routing
+- **Session Management**: AI agent conversation persistence
+- **Cost Tracking and Rate Limiting**: Budget enforcement
+- **Pulumi Deployment Flow**: Infrastructure as code deployment
+
+**Target Audience**: All developers, architects, and system designers
 
 ### [API Documentation](api/README.md)
 

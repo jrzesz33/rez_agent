@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Tool
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
-
+# The LangChain MCP Adapter can be used to import tools from a remote MCP server, making them accessible to your LangGraph agent.
 # Import Bedrock configuration for rate limiting and retry logic
 from bedrock_config import (
     create_bedrock_client,

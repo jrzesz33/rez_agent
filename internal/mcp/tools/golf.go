@@ -70,67 +70,19 @@ func (t *GolfReservationsTool) Execute(ctx context.Context, args map[string]inte
 		return nil, fmt.Errorf("failed to find course: %w", err)
 	}
 
-	// Build URLs from course config
-	apiURL, err := course.GetActionURL("get-reservations")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get reservations URL: %w", err)
-	}
-
-	tokenURL, err := course.GetActionURL("token-url")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get token URL: %w", err)
-	}
-
-	/*jwksURL, err := course.GetActionURL("jwks-url")
-	if err != nil {
-		// JWKS URL is optional
-		jwksURL = ""
-	}*/
-
 	secretName := course.GetSecretName(t.stage)
-
-	t.logger.Info("using course configuration",
-		slog.String("api_url", apiURL),
-		slog.String("token_url", tokenURL),
-	)
 
 	// Create web action payload
 	payload := &models.WebActionPayload{
-		Version: "1.0",
-		Action:  models.WebActionTypeGolf,
-		URL:     apiURL,
+		Version:  "1.0",
+		Action:   models.WebActionTypeGolf,
+		CourseID: course.CourseID,
 		AuthConfig: &models.AuthConfig{
 			Type:       models.AuthTypeOAuthPassword,
-			TokenURL:   tokenURL,
 			SecretName: secretName,
-			//Scope:      "openid profile email",
-			//JWKSURL:    jwksURL,
 		},
 	}
-	/*
-		// serialize payload for logging
-		t.logger.Info("constructed web action payload", slog.Any("payload", payload))
-		payloadStr, err := payload.ToJSONString()
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize web action payload: %w", err)
-		}
-		// create mcp message for sns queue
-		message := models.NewMessage("mcp", models.Stage(t.stage), models.MessageTypeWebAction, payloadStr)
 
-		// Mark as queued
-		message.MarkQueued()
-
-		// Publish to SNS
-		err = t.publisher.PublishMessage(ctx, message)
-		if err != nil {
-			t.logger.ErrorContext(ctx, "failed to publish message", slog.String("error", err.Error()))
-			return nil, err
-		}
-
-
-			CLAUDE I WOULD LIKE TO MAKE THIS A ASYNCH PROCESS
-			RETURN A STATUS
-	*/
 	argsOut := make(map[string]interface{})
 	argsOut["operation"] = "fetch_reservations"
 
@@ -232,39 +184,19 @@ func (t *GolfSearchTeeTimesTool) Execute(ctx context.Context, args map[string]in
 		return nil, fmt.Errorf("failed to find course: %w", err)
 	}
 
-	// Build URLs from course config
-	apiURL, err := course.GetActionURL("search-tee-times")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get search URL: %w", err)
-	}
-
-	tokenURL, err := course.GetActionURL("token-url")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get token URL: %w", err)
-	}
-
-	jwksURL, err := course.GetActionURL("jwks-url")
-	if err != nil {
-		jwksURL = ""
-	}
-
 	secretName := course.GetSecretName(t.stage)
 
 	t.logger.Info("using course configuration",
-		slog.String("api_url", apiURL),
-		slog.String("token_url", tokenURL),
+		slog.String("name", course.Name),
 	)
 
 	// Create web action payload
 	payload := &models.WebActionPayload{
-		Action: models.WebActionTypeGolf,
-		URL:    apiURL,
+		Action:   models.WebActionTypeGolf,
+		CourseID: course.CourseID,
 		AuthConfig: &models.AuthConfig{
 			Type:       models.AuthTypeOAuthPassword,
-			TokenURL:   tokenURL,
 			SecretName: secretName,
-			Scope:      "openid profile email",
-			JWKSURL:    jwksURL,
 		},
 
 		StartSearchTime: startTime,
@@ -355,39 +287,15 @@ func (t *GolfBookTeeTimeTool) Execute(ctx context.Context, args map[string]inter
 		return nil, fmt.Errorf("failed to find course: %w", err)
 	}
 
-	// Build URLs from course config
-	apiURL, err := course.GetActionURL("book-tee-time")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get booking URL: %w", err)
-	}
-
-	tokenURL, err := course.GetActionURL("token-url")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get token URL: %w", err)
-	}
-
-	jwksURL, err := course.GetActionURL("jwks-url")
-	if err != nil {
-		jwksURL = ""
-	}
-
 	secretName := course.GetSecretName(t.stage)
-
-	t.logger.Info("using course configuration",
-		slog.String("api_url", apiURL),
-		slog.String("token_url", tokenURL),
-	)
 
 	// Create web action payload
 	payload := &models.WebActionPayload{
-		Action: models.WebActionTypeGolf,
-		URL:    apiURL,
+		Action:   models.WebActionTypeGolf,
+		CourseID: course.CourseID,
 		AuthConfig: &models.AuthConfig{
 			Type:       models.AuthTypeOAuthPassword,
-			TokenURL:   tokenURL,
 			SecretName: secretName,
-			Scope:      "openid profile email",
-			JWKSURL:    jwksURL,
 		},
 		TeeSheetID: teeSheetID,
 	}

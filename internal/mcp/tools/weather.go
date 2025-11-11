@@ -36,7 +36,7 @@ func (t *WeatherTool) GetDefinition() protocol.Tool {
 			Properties: map[string]protocol.Property{
 				"location": {
 					Type:        "string",
-					Description: "Weather.gov forecast URL (e.g., https://api.weather.gov/gridpoints/TOP/31,80/forecast)",
+					Description: "URL of the the Course from weather.gov (e.g. https://api.weather.gov/gridpoints/TOP/31,80/forecast)",
 				},
 				"days": {
 					Type:        "integer",

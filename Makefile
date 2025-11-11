@@ -78,8 +78,9 @@ build-agent: $(AGENT_DIR) ## Build AI agent Lambda function (Python)
 build-mcp: ## Build MCP Lambda function
 	@echo "$(YELLOW)Building MCP Lambda...$(NC)"
 	@mkdir -p $(BUILD_DIR)
+	@cp pkg/courses/courseInfo.yaml $(BUILD_DIR)/courseInfo.yaml
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o $(BUILD_DIR)/bootstrap ./cmd/mcp
-	@cd $(BUILD_DIR) && zip mcp.zip bootstrap && rm bootstrap
+	@cd $(BUILD_DIR) && zip mcp.zip bootstrap courseInfo.yaml && rm bootstrap && rm courseInfo.yaml
 	@echo "$(GREEN)MCP Lambda built: $(BUILD_DIR)/mcp.zip$(NC)"
 
 build-mcp-client: ## Build MCP stdio client binary

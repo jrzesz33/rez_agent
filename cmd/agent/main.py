@@ -28,31 +28,10 @@ from bedrock_config import (
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Import MCP-based tools (synchronous execution via MCP server)
-# Fallback to legacy SNS-based tools if MCP is not available
-try:
-    from agent_tools_mcp import (
-        get_reservations_tool,
-        search_tee_times_tool,
-        book_tee_time_tool,
-        get_weather_tool,
-        send_notification_tool,
-    )
-    logger.info("Using MCP-based tools")
-    USING_MCP = True
-except Exception as e:
-    logger.warning(f"MCP tools not available, falling back to legacy tools: {e}")
-    from agent_tools import (
-        get_reservations_tool,
-        search_tee_times_tool,
-        book_tee_time_tool,
-        get_weather_tool,
-        send_notification_tool,
-    )
-    USING_MCP = False
+# Import LangChain MCP Adapter for remote MCP server integration
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from course_config import load_course_config
 from cost_limiter import CostLimiter
-from response_handler import ResponseHandler
 
 # Environment variables
 STAGE = os.environ.get("STAGE", "dev")
@@ -60,6 +39,7 @@ DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")
 SESSION_TABLE_NAME = os.environ.get("AGENT_SESSION_TABLE_NAME")
 AGENT_RESPONSE_TOPIC_ARN = os.environ.get("AGENT_RESPONSE_TOPIC_ARN")
 AGENT_RESPONSE_QUEUE_URL = os.environ.get("AGENT_RESPONSE_QUEUE_URL")
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL")
 
 # Bedrock LLM Configuration
 BEDROCK_MODEL_ID = os.environ.get(
@@ -111,20 +91,30 @@ class AgentState(BaseModel):
     current_time: str = ""
 
 
-def create_agent_graph():
-    """Create the LangGraph agent workflow"""
+async def create_agent_graph():
+    """Create the LangGraph agent workflow with MCP tools"""
 
     # Load course configuration
     course_config = load_course_config()
 
-    # Get tools
-    tools = [
-        get_reservations_tool,
-        search_tee_times_tool,
-        book_tee_time_tool,
-        get_weather_tool,
-        send_notification_tool,
-    ]
+    # Validate MCP server URL is configured
+    if not MCP_SERVER_URL:
+        raise ValueError("MCP_SERVER_URL environment variable must be set")
+
+    # Initialize MCP client to connect to remote MCP server
+    mcp_client = MultiServerMCPClient(
+        {
+            "rez-agent-mcp": {
+                "transport": "streamable_http",
+                "url": MCP_SERVER_URL,
+            }
+        }
+    )
+
+    # Get tools from MCP server - returns LangChain-compatible tools
+    tools = await mcp_client.get_tools()
+
+    logger.info(f"Loaded {len(tools)} tools from MCP server: {[tool.name for tool in tools]}")
 
     # Initialize Bedrock LLM with tools
     # ChatBedrockConverse supports tool binding via bind_tools()
@@ -327,11 +317,11 @@ When searching for tee times, ask for the date, time range, and number of player
 agent_graph = None
 
 
-def get_agent():
-    """Get or create agent graph (lazy initialization)"""
+async def get_agent():
+    """Get or create agent graph (lazy async initialization)"""
     global agent_graph
     if agent_graph is None:
-        agent_graph = create_agent_graph()
+        agent_graph = await create_agent_graph()
     return agent_graph
 
 
@@ -378,18 +368,14 @@ def save_session(session_id: str, messages: List[Dict]) -> None:
         logger.error(f"Error saving session: {e}")
 
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
-    Lambda handler for AI agent.
-    Handles both API Gateway requests and SQS events for tool responses.
+    Async Lambda handler for AI agent with MCP integration.
+    Handles API Gateway requests with LangChain MCP Adapter for tool execution.
     """
     logger.info(f"Received event: {json.dumps(event)}")
 
     try:
-        # Check if this is an SQS event (tool responses)
-        if "Records" in event and event.get("Records"):
-            return handle_sqs_event(event)
-
         # Check if requesting agent card (for A2A discovery)
         request_path = event.get("rawPath", "")
         if request_path == "/agent/card" or request_path == "/agent/.well-known/agent-card":
@@ -513,66 +499,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             current_time=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         )
 
-        # Run agent (initial reasoning and tool calling)
-        agent = get_agent()
-        result = agent.invoke(state)
+        # Run agent with MCP tools (synchronous execution via remote MCP server)
+        agent = await get_agent()
+        result = await agent.ainvoke(state)
 
-        # If using legacy SNS-based tools, poll for async responses
-        # With MCP tools, execution is synchronous and results are already in the messages
-        if not USING_MCP:
-            # Check if agent called any async tools (reservations, tee times, weather)
-            has_async_tools = False
-            tool_calls = []
-
-            for msg in result['messages']:
-                if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                    for tool_call in msg.tool_calls:
-                        tool_name = tool_call.get('name', '')
-                        if tool_name in ['get_reservations_tool', 'search_tee_times_tool',
-                                        'book_tee_time_tool', 'get_weather_tool']:
-                            has_async_tools = True
-                            tool_calls.append(tool_name)
-
-            # If async tools were called, poll for responses
-            tool_responses = []
-            if has_async_tools and response_handler:
-                logger.info(f"Polling for {len(tool_calls)} async tool responses...")
-
-                # Poll for responses with timeout
-                responses = response_handler.poll_responses(timeout_seconds=30)
-
-                if responses:
-                    logger.info(f"Received {len(responses)} tool responses")
-
-                    # Format responses for agent
-                    for response in responses:
-                        formatted = response_handler.format_response_for_agent(response)
-                        tool_responses.append(formatted)
-
-                    # Add tool responses to agent context
-                    if tool_responses:
-                        tool_response_message = "\n\n".join(tool_responses)
-                        result['messages'].append(HumanMessage(content=f"Tool Results:\n{tool_response_message}"))
-
-                        # Re-invoke agent with tool results
-                        logger.info("Re-invoking agent with tool responses")
-                        try:
-                            result = agent.invoke(result)
-                        except Exception as e:
-                            logger.error(f"Error re-invoking agent: {e}", exc_info=True)
-                            # Add error message to conversation
-                            result['messages'].append(AIMessage(
-                                content="I received the tool results but encountered an error processing them. "
-                                        "Please try your request again."
-                            ))
-                else:
-                    logger.warning("No tool responses received within timeout")
-                    # Add a message indicating tools are processing
-                    result['messages'].append(AIMessage(
-                        content="I've submitted your request for processing. The results should be available shortly."
-                    ))
-        else:
-            logger.info("Using MCP tools - synchronous execution, no polling needed")
+        logger.info("MCP tools executed successfully - synchronous execution, results in messages")
 
         # Extract final response
         final_message = result['messages'][-1]
@@ -655,43 +586,18 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         }
 
 
-def handle_sqs_event(event: Dict[str, Any]) -> Dict[str, Any]:
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
-    Handle SQS events containing tool responses.
-    These are stored for later retrieval when polling.
+    Synchronous Lambda handler wrapper for async MCP agent.
+    AWS Lambda requires a synchronous entry point.
     """
-    logger.info(f"Handling SQS event with {len(event['Records'])} records")
+    import asyncio
 
-    batch_item_failures = []
+    # Run the async handler in an event loop
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        # If loop is already running (shouldn't happen in Lambda), create new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-    for record in event["Records"]:
-        try:
-            # Parse message body
-            message_body = json.loads(record["body"])
-
-            logger.info(f"Received tool response: {message_body.get('id')}")
-
-            # The message is already in the queue - response_handler will poll it
-            # This handler is just for logging and validation
-            # The actual processing happens in the main handler when polling
-
-            # Validate message structure
-            required_fields = ["id", "created_by", "message_type", "payload"]
-            for field in required_fields:
-                if field not in message_body:
-                    logger.error(f"Missing required field: {field}")
-                    raise ValueError(f"Invalid message: missing {field}")
-
-            logger.info(f"Successfully processed tool response: {message_body.get('id')}")
-
-        except Exception as e:
-            logger.error(f"Error processing SQS record: {e}", exc_info=True)
-            # Add to batch failures for retry
-            batch_item_failures.append({
-                "itemIdentifier": record["messageId"]
-            })
-
-    # Return batch failures for SQS to retry
-    return {
-        "batchItemFailures": batch_item_failures
-    }
+    return loop.run_until_complete(async_lambda_handler(event, context))

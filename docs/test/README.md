@@ -35,12 +35,12 @@ curl -X POST \
   -d @./docs/test/messages/web_api_get_tee_times.json \
   $WEBAPI_URL/api/messages
 ```
-## Get Tee Times
+## Create Schedule
 
 ``` bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d @./docs/test/messages/web_api_get_tee_times.json \
+  -d @./docs/test/messages/web_api_create_schedule.json \
   $WEBAPI_URL/api/messages
 ```
 

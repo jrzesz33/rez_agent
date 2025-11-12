@@ -792,6 +792,20 @@ func main() {
 		}
 
 		// ========================================
+		// API Gateway HTTP API (created early for MCP URL)
+		// ========================================
+
+		httpApi, err := apigatewayv2.NewApi(ctx, fmt.Sprintf("rez-agent-api-%s", stage), &apigatewayv2.ApiArgs{
+			Name:         pulumi.String(fmt.Sprintf("rez-agent-api-%s", stage)),
+			ProtocolType: pulumi.String("HTTP"),
+			Description:  pulumi.String("HTTP API for rez-agent web interface"),
+			Tags:         commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// ========================================
 		// Lambda Functions
 		// ========================================
 
@@ -813,7 +827,10 @@ func main() {
 					"NOTIFICATION_SQS_QUEUE_URL":     notificationsQueue.Url,
 					"EVENTBRIDGE_EXECUTION_ROLE_ARN": eventBridgeSchedulerExecutionRole.Arn,
 					"BEDROCK_MODEL_ID":               pulumi.String("anthropic.claude-3-5-sonnet-20241022-v2:0"),
-					"STAGE":                          pulumi.String(stage),
+					"MCP_SERVER_URL": httpApi.ApiEndpoint.ApplyT(func(endpoint string) string {
+						return fmt.Sprintf("%s/mcp", endpoint)
+					}).(pulumi.StringOutput),
+					"STAGE": pulumi.String(stage),
 				},
 			},
 			MemorySize: pulumi.Int(256),
@@ -1056,16 +1073,6 @@ func main() {
 		// ========================================
 
 		// API Gateway HTTP API
-		httpApi, err := apigatewayv2.NewApi(ctx, fmt.Sprintf("rez-agent-api-%s", stage), &apigatewayv2.ApiArgs{
-			Name:         pulumi.String(fmt.Sprintf("rez-agent-api-%s", stage)),
-			ProtocolType: pulumi.String("HTTP"),
-			Description:  pulumi.String("HTTP API for rez-agent web interface"),
-			Tags:         commonTags,
-		})
-		if err != nil {
-			return err
-		}
-
 		// Lambda permission for API Gateway to invoke WebAPI
 		_, err = lambda.NewPermission(ctx, fmt.Sprintf("rez-agent-webapi-apigw-permission-%s", stage), &lambda.PermissionArgs{
 			Action:    pulumi.String("lambda:InvokeFunction"),

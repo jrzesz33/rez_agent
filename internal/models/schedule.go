@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 )
 
 // ScheduleStatus represents the current state of a schedule
@@ -120,53 +124,92 @@ type Schedule struct {
 
 	// Stage is the environment (dev, stage, prod)
 	Stage Stage `json:"stage" dynamodbav:"stage"`
+	// CreateScheduleReq is the AWS SDK input used to create the EventBridge Schedule
+	CreateRequest *scheduler.CreateScheduleInput
 }
 
 // NewSchedule creates a new schedule with default values
 func NewSchedule(
-	name string,
-	scheduleExpression string,
-	timezone string,
-	targetType TargetType,
-	targetTopicArn string,
-	payload map[string]interface{},
+	msg *Message,
 	createdBy string,
+	targetTopicArn string,
 	stage Stage,
+	execRoleArn string,
 ) (*Schedule, error) {
+
+	var scheduleOut Schedule
+
 	now := time.Now().UTC()
-
+	scheduleOut.ID = generateScheduleID(now)
+	scheduleOut.Name = msg.Arguments["name"].(string)
+	scheduleOut.ScheduleExpression = msg.Arguments["schedule_expression"].(string)
+	scheduleOut.Timezone = msg.Arguments["timezone"].(string)
+	scheduleOut.TargetType = TargetType(msg.Arguments["target_type"].(string))
+	scheduleOut.Status = ScheduleStatusActive
+	scheduleOut.CreatedBy = createdBy
+	scheduleOut.CreatedDate = now
+	scheduleOut.UpdatedDate = now
+	scheduleOut.ExecutionCount = 0
+	scheduleOut.TargetTopicArn = targetTopicArn
+	scheduleOut.Stage = stage
 	// Validate timezone
-	if timezone == "" {
-		timezone = "UTC"
+	if scheduleOut.Timezone == "" {
+		scheduleOut.Timezone = "UTC"
 	}
-	if _, err := time.LoadLocation(timezone); err != nil {
-		return nil, fmt.Errorf("invalid timezone %q: %w", timezone, err)
+	if _, err := time.LoadLocation(scheduleOut.Timezone); err != nil {
+		return nil, fmt.Errorf("invalid timezone %q: %w", scheduleOut.Timezone, err)
 	}
 
-	// Generate EventBridge name (must be unique and conform to naming rules)
-	eventBridgeName := generateEventBridgeName(name, stage)
-	// 1. Marshal the map into a JSON byte slice
-	jsonBytes, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Println("Error marshaling map:", err)
-		return nil, fmt.Errorf("invalid payload %q: %w", timezone, err)
+	if msg.Arguments["description"] != nil {
+		scheduleOut.Description = msg.Arguments["description"].(string)
 	}
-	return &Schedule{
-		ID:                 generateScheduleID(now),
-		Name:               name,
-		ScheduleExpression: scheduleExpression,
-		Timezone:           timezone,
-		TargetType:         targetType,
-		TargetTopicArn:     targetTopicArn,
-		Payload:            string(jsonBytes),
-		EventBridgeName:    eventBridgeName,
-		Status:             ScheduleStatusActive,
-		CreatedBy:          createdBy,
-		CreatedDate:        now,
-		UpdatedDate:        now,
-		ExecutionCount:     0,
-		Stage:              stage,
-	}, nil
+	// Generate EventBridge name (must be unique and conform to naming rules)
+	eventBridgeName := generateEventBridgeName(scheduleOut.Name, stage)
+
+	// Build the new Message for the Payload
+
+	// Only include relevant arguments for the schedule target
+	_newArgs := make(map[string]interface{})
+	if MessageType(scheduleOut.TargetType) == MessageTypeWebAction {
+		if msg.Arguments["operation"] != nil {
+			_newArgs["operation"] = msg.Arguments["operation"]
+		} else {
+			return nil, fmt.Errorf("missing required argument 'operation' for web_action target")
+		}
+	}
+	payloadMsg := NewMessage(
+		createdBy,
+		_newArgs,
+		"1.0",
+		stage,
+		MessageType(scheduleOut.TargetType),
+		msg.Payload)
+
+	payloadBytes, err := json.Marshal(payloadMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal schedule payload: %w", err)
+	}
+	// Create the schedule targeting the SQS queue
+	scheduleOut.CreateRequest = &scheduler.CreateScheduleInput{
+		Name:                       aws.String(eventBridgeName),
+		ScheduleExpression:         aws.String(scheduleOut.ScheduleExpression),
+		ScheduleExpressionTimezone: &scheduleOut.Timezone,
+		State:                      types.ScheduleStateEnabled,
+		Description:                aws.String(scheduleOut.Description),
+		FlexibleTimeWindow: &types.FlexibleTimeWindow{
+			Mode: types.FlexibleTimeWindowModeOff,
+		},
+		Target: &types.Target{
+			Arn:     aws.String(targetTopicArn),
+			RoleArn: aws.String(execRoleArn),
+			Input:   aws.String(string(payloadBytes)),
+		},
+	}
+	err = scheduleOut.Validate()
+	if err != nil {
+		return nil, fmt.Errorf("invalid schedule data: %w", err)
+	}
+	return &scheduleOut, nil
 }
 
 // generateScheduleID generates a unique schedule ID
@@ -258,14 +301,9 @@ func (s *Schedule) Validate() error {
 	if !s.TargetType.IsValid() {
 		return fmt.Errorf("invalid target type: %s", s.TargetType)
 	}
-	if s.TargetTopicArn == "" {
-		return fmt.Errorf("target topic ARN is required")
-	}
+
 	if !s.Status.IsValid() {
 		return fmt.Errorf("invalid status: %s", s.Status)
-	}
-	if !s.Stage.IsValid() {
-		return fmt.Errorf("invalid stage: %s", s.Stage)
 	}
 
 	// Validate timezone
@@ -300,13 +338,13 @@ func ValidateScheduleExpression(expr string) error {
 		// TODO: Add more validation for rate values if needed
 		return nil
 	}
-
+	//0 12 * * ? *
 	if strings.HasPrefix(expr, "cron(") && strings.HasSuffix(expr, ")") {
 		// cron(Minutes Hours Day-of-month Month Day-of-week Year)
 		cronContent := expr[5 : len(expr)-1]
 		parts := strings.Fields(cronContent)
 		if len(parts) != 6 {
-			return fmt.Errorf("cron expression must have 6 fields: Minutes Hours Day-of-month Month Day-of-week Year")
+			return fmt.Errorf("cron expression must have 5 fields: Minutes Hours Day-of-month Month Day-of-week Year")
 		}
 		// TODO: Add more detailed cron field validation if needed
 		return nil

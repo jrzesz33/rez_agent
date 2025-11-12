@@ -1,0 +1,25 @@
+{
+    "version": "1.0",
+    "arguments": {
+        "action": "create",
+        "name": "daily-tee-time-check",
+        "schedule_expression": "cron(33 15 * * ? *)",
+        "timezone": "America/New_York",
+        "target_type": "web_action",
+        "description": "Check for available tee times daily at 6 AM EST",
+        "operation": "search_tee_times"
+    },
+    "payload": {
+        "startSearchTime": "2025-11-15T09:30:00",
+        "endSearchTime": "2025-11-15T16:30:00",
+        "action": "golf",
+        "autoBook": false,
+        "courseID": 1,
+        "auth_config": {
+            "type": "oauth_password",
+            "secret_name": "rez-agent/golf/credentials-prod"
+        }
+    },
+    "stage": "dev",
+    "message_type": "schedule_creation"
+}

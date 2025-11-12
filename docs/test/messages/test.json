@@ -1,10 +1,11 @@
 {
     "version": "1.0",
+    "id": "msg_20251112222207_򘵐",
+    "created_date": "2025-11-12T22:22:07.346626Z",
+    "created_by": "scheduler",
     "stage": "dev",
     "message_type": "web_action",
-    "arguments": {
-        "operation": "search_tee_times"
-    },
+    "status": "created",
     "payload": {
         "action": "golf",
         "auth_config": {
@@ -15,5 +16,10 @@
         "courseID": 1,
         "endSearchTime": "2025-11-15T16:30:00",
         "startSearchTime": "2025-11-15T09:30:00"
-    }    
+    },
+    "arguments": {
+        "operation": "search_tee_times"
+    },
+    "updated_date": "2025-11-12T22:22:07.346626Z",
+    "retry_count": 0
 }

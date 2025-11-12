@@ -134,49 +134,6 @@ sequenceDiagram
     Agent-->>User: "✓ Booked! Confirmation #67890"
 ```
 
----
-
-## AI Agent Interaction (Legacy)
-
-Legacy flow using SNS-based async tools (before MCP refactor).
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant API as API Gateway
-    participant Agent as Agent Lambda
-    participant Bedrock as AWS Bedrock
-    participant SNS as Web Actions Topic
-    participant SQS as Agent Response Queue
-    participant WebAction as WebAction Lambda
-    participant DDB as DynamoDB
-
-    User->>API: POST /agent<br/>{"message": "Check weather"}
-    API->>Agent: Invoke
-    Agent->>DDB: Load session
-    Agent->>Bedrock: Invoke with tools
-    Bedrock-->>Agent: Tool call: get_weather
-
-    Agent->>SNS: Publish web_action<br/>(weather request)
-    SNS-->>Agent: Published
-    Agent-->>User: "Fetching weather..."
-
-    Note over WebAction,SQS: Async processing
-    WebAction->>External API: Get weather
-    External API-->>WebAction: Weather data
-    WebAction->>SNS: Publish to agent response
-    SNS->>SQS: Deliver
-
-    SQS->>Agent: Trigger with results
-    Agent->>DDB: Load session
-    Agent->>Bedrock: Invoke with tool results
-    Bedrock-->>Agent: "Temperature is 72°F..."
-    Agent->>DDB: Save session
-    Agent-->>User: Final response
-```
-
----
-
 ## AI Agent with MCP Integration
 
 New flow using LangChain MCP Adapter (post-refactor).

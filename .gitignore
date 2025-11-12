@@ -66,3 +66,4 @@ cmd/agent/__pycache__/agent_tools.cpython-311.pyc
 .aws-sam/
 samconfig.toml.bak
 events/*.local.json
+cmd/agent/set_env.sh

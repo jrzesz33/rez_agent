@@ -670,6 +670,16 @@ func main() {
 						"Effect": "Allow",
 						"Action": ["lambda:InvokeFunction"],
 						"Resource": "arn:aws:lambda:*:*:function:rez-agent-scheduler-*"
+					},
+					{
+						"Effect": "Allow",
+						"Action": ["sns:Publish"],
+						"Resource": "*"
+					},
+					{
+						"Effect": "Allow",
+						"Action": ["sqs:SendMessage"],
+						"Resource": "arn:aws:sqs:*:*:rez-agent-schedule-creation-queue-*"
 					}
 				]
 			}`),

@@ -11,6 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/mcp/protocol"
 	"github.com/jrzesz33/rez_agent/internal/secrets"
@@ -43,6 +47,7 @@ type ScheduledAgentEvent struct {
 
 // AWSAgentEventHandler implements AgentEventHandler using AWS Bedrock
 type AWSAgentEventHandler struct {
+	bedrockClient  *bedrockruntime.Client
 	httpClient     *httpclient.Client
 	secretsManager *secrets.Manager
 	mcpServerURL   string
@@ -50,10 +55,12 @@ type AWSAgentEventHandler struct {
 	logger         *slog.Logger
 	maxRetries     int
 	retryDelay     time.Duration
+	modelID        string
 }
 
 // NewAWSAgentEventHandler creates a new AWS-based agent event handler
 func NewAWSAgentEventHandler(
+	bedrockClient *bedrockruntime.Client,
 	httpClient *httpclient.Client,
 	secretsManager *secrets.Manager,
 	logger *slog.Logger,
@@ -69,6 +76,7 @@ func NewAWSAgentEventHandler(
 	}
 
 	return &AWSAgentEventHandler{
+		bedrockClient:  bedrockClient,
 		httpClient:     httpClient,
 		secretsManager: secretsManager,
 		mcpServerURL:   mcpURL,
@@ -76,6 +84,7 @@ func NewAWSAgentEventHandler(
 		logger:         logger,
 		maxRetries:     3,
 		retryDelay:     5 * time.Second,
+		modelID:        "anthropic.claude-3-5-sonnet-20241022-v2:0",
 	}
 }
 
@@ -357,28 +366,225 @@ Now complete this task:`, currentDate, reservations, weather, event.NumPlayers)
 
 // executeAgentConversation runs the multi-step conversation loop with Bedrock
 func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, systemMsg, userPrompt string, tools []protocol.Tool) (string, error) {
-	// TODO: Implement Bedrock conversation loop
-	// This will use AWS Bedrock's Converse API with tool support:
-	// 1. Create BedrockRuntimeClient from aws-sdk-go-v2/service/bedrockruntime
-	// 2. Convert MCP tools to Bedrock tool definitions
-	// 3. Call Converse API with system message, user prompt, and tools
-	// 4. Loop through tool calls:
-	//    - When Bedrock requests a tool, call it via MCP
-	//    - Feed tool results back to Bedrock
-	//    - Continue until Bedrock stops requesting tools
-	// 5. Return final assistant message
-	//
-	// Model: anthropic.claude-3-5-sonnet-20241022-v2:0
-	//
-	// For now, return a placeholder to allow compilation
-
 	h.logger.InfoContext(ctx, "executing agent conversation",
-		slog.String("model", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
+		slog.String("model", h.modelID),
 		slog.Int("tools_available", len(tools)),
 	)
 
-	// Placeholder for actual Bedrock implementation
-	return fmt.Sprintf("Agent conversation completed for: %s", userPrompt), nil
+	// Convert MCP tools to Bedrock tool specifications
+	bedrockTools := h.convertMCPToolsToBedrock(tools)
+
+	// Initialize conversation with system message and user prompt
+	messages := []types.Message{
+		{
+			Role: types.ConversationRoleUser,
+			Content: []types.ContentBlock{
+				&types.ContentBlockMemberText{
+					Value: userPrompt,
+				},
+			},
+		},
+	}
+
+	// Conversation loop - continue until no more tool calls
+	const maxIterations = 10 // Safety limit
+	var finalResponse string
+
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		h.logger.InfoContext(ctx, "bedrock conversation iteration",
+			slog.Int("iteration", iteration+1),
+			slog.Int("message_count", len(messages)),
+		)
+
+		// Call Bedrock Converse API
+		converseOutput, err := h.bedrockClient.Converse(ctx, &bedrockruntime.ConverseInput{
+			ModelId: aws.String(h.modelID),
+			System: []types.SystemContentBlock{
+				&types.SystemContentBlockMemberText{
+					Value: systemMsg,
+				},
+			},
+			Messages: messages,
+			ToolConfig: &types.ToolConfiguration{
+				Tools: bedrockTools,
+			},
+			InferenceConfig: &types.InferenceConfiguration{
+				MaxTokens:   aws.Int32(4096),
+				Temperature: aws.Float32(0.7),
+			},
+		})
+
+		if err != nil {
+			return "", fmt.Errorf("bedrock converse failed: %w", err)
+		}
+
+		// Add assistant response to conversation history
+		messages = append(messages, types.Message{
+			Role:    types.ConversationRoleAssistant,
+			Content: converseOutput.Output.(*types.ConverseOutputMemberMessage).Value.Content,
+		})
+
+		// Check stop reason
+		stopReason := converseOutput.StopReason
+		h.logger.InfoContext(ctx, "bedrock response received",
+			slog.String("stop_reason", string(stopReason)),
+		)
+
+		// If no tool use, we're done
+		if stopReason == types.StopReasonEndTurn || stopReason == types.StopReasonMaxTokens {
+			// Extract final text response
+			finalResponse = h.extractTextFromMessage(converseOutput.Output.(*types.ConverseOutputMemberMessage).Value)
+			break
+		}
+
+		// Handle tool use
+		if stopReason == types.StopReasonToolUse {
+			toolResults, err := h.processToolCalls(ctx, converseOutput.Output.(*types.ConverseOutputMemberMessage).Value.Content)
+			if err != nil {
+				return "", fmt.Errorf("tool execution failed: %w", err)
+			}
+
+			// Add tool results to conversation
+			messages = append(messages, types.Message{
+				Role:    types.ConversationRoleUser,
+				Content: toolResults,
+			})
+
+			// Continue loop to process tool results
+			continue
+		}
+
+		// Unknown stop reason
+		return "", fmt.Errorf("unexpected stop reason: %s", stopReason)
+	}
+
+	if finalResponse == "" {
+		return "", fmt.Errorf("conversation ended without final response after %d iterations", maxIterations)
+	}
+
+	h.logger.InfoContext(ctx, "agent conversation completed",
+		slog.Int("total_iterations", len(messages)/2),
+	)
+
+	return finalResponse, nil
+}
+
+// convertMCPToolsToBedrock converts MCP tool definitions to Bedrock format
+func (h *AWSAgentEventHandler) convertMCPToolsToBedrock(mcpTools []protocol.Tool) []types.Tool {
+	bedrockTools := make([]types.Tool, 0, len(mcpTools))
+
+	for _, mcpTool := range mcpTools {
+		// Convert MCP InputSchema to Bedrock ToolInputSchema
+		inputSchema := map[string]interface{}{
+			"type":       mcpTool.InputSchema.Type,
+			"properties": mcpTool.InputSchema.Properties,
+		}
+		if len(mcpTool.InputSchema.Required) > 0 {
+			inputSchema["required"] = mcpTool.InputSchema.Required
+		}
+
+		bedrockTools = append(bedrockTools, &types.ToolMemberToolSpec{
+			Value: types.ToolSpecification{
+				Name:        aws.String(mcpTool.Name),
+				Description: aws.String(mcpTool.Description),
+				InputSchema: &types.ToolInputSchemaMemberJson{
+					Value: document.NewLazyDocument(inputSchema),
+				},
+			},
+		})
+	}
+
+	return bedrockTools
+}
+
+// processToolCalls executes tool calls requested by Bedrock
+func (h *AWSAgentEventHandler) processToolCalls(ctx context.Context, content []types.ContentBlock) ([]types.ContentBlock, error) {
+	results := make([]types.ContentBlock, 0)
+
+	for _, block := range content {
+		if toolUse, ok := block.(*types.ContentBlockMemberToolUse); ok {
+			toolName := *toolUse.Value.Name
+			toolUseID := *toolUse.Value.ToolUseId
+
+			h.logger.InfoContext(ctx, "executing MCP tool",
+				slog.String("tool_name", toolName),
+				slog.String("tool_use_id", toolUseID),
+			)
+
+			// Parse input arguments - Bedrock uses document.Interface
+			var args map[string]interface{}
+			if toolUse.Value.Input != nil {
+				// Marshal and unmarshal to convert document.Interface to map
+				inputJSON, err := json.Marshal(toolUse.Value.Input)
+				if err == nil {
+					json.Unmarshal(inputJSON, &args)
+				}
+			}
+
+			// Call MCP tool
+			mcpReq := protocol.ToolCallRequest{
+				Name:      toolName,
+				Arguments: args,
+			}
+
+			mcpResult, err := h.callMCPTool(ctx, mcpReq)
+			if err != nil {
+				h.logger.ErrorContext(ctx, "MCP tool execution failed",
+					slog.String("tool_name", toolName),
+					slog.String("error", err.Error()),
+				)
+
+				// Return error as tool result
+				results = append(results, &types.ContentBlockMemberToolResult{
+					Value: types.ToolResultBlock{
+						ToolUseId: aws.String(toolUseID),
+						Content: []types.ToolResultContentBlock{
+							&types.ToolResultContentBlockMemberText{
+								Value: fmt.Sprintf("Error: %s", err.Error()),
+							},
+						},
+						Status: types.ToolResultStatusError,
+					},
+				})
+				continue
+			}
+
+			// Convert MCP result to Bedrock format
+			toolResultContent := make([]types.ToolResultContentBlock, 0, len(mcpResult.Content))
+			for _, content := range mcpResult.Content {
+				toolResultContent = append(toolResultContent, &types.ToolResultContentBlockMemberText{
+					Value: content.Text,
+				})
+			}
+
+			results = append(results, &types.ContentBlockMemberToolResult{
+				Value: types.ToolResultBlock{
+					ToolUseId: aws.String(toolUseID),
+					Content:   toolResultContent,
+					Status:    types.ToolResultStatusSuccess,
+				},
+			})
+
+			h.logger.InfoContext(ctx, "MCP tool executed successfully",
+				slog.String("tool_name", toolName),
+			)
+		}
+	}
+
+	return results, nil
+}
+
+// extractTextFromMessage extracts text content from Bedrock message
+func (h *AWSAgentEventHandler) extractTextFromMessage(msg types.Message) string {
+	var texts []string
+
+	for _, block := range msg.Content {
+		if textBlock, ok := block.(*types.ContentBlockMemberText); ok {
+			texts = append(texts, textBlock.Value)
+		}
+	}
+
+	return strings.Join(texts, "\n")
 }
 
 // callMCPTool calls an MCP tool and returns the result

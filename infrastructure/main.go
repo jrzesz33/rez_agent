@@ -354,6 +354,30 @@ func main() {
 			return err
 		}
 
+		// Schedule Creation DLQ
+		scheduleCreationDlq, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-schedule-creation-dlq-%s", stage), &sqs.QueueArgs{
+			Name:                    pulumi.String(fmt.Sprintf("rez-agent-schedule-creation-dlq-%s", stage)),
+			MessageRetentionSeconds: pulumi.Int(1209600), // 14 days
+			Tags:                    commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Schedule Creation Queue
+		scheduleCreationQueue, err := sqs.NewQueue(ctx, fmt.Sprintf("rez-agent-schedule-creation-%s", stage), &sqs.QueueArgs{
+			Name:                     pulumi.String(fmt.Sprintf("rez-agent-schedule-creation-%s", stage)),
+			VisibilityTimeoutSeconds: pulumi.Int(60),      // 1 minute (schedule creation should be quick)
+			MessageRetentionSeconds:  pulumi.Int(1209600), // 14 days
+			RedrivePolicy: scheduleCreationDlq.Arn.ApplyT(func(arn string) string {
+				return fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":3}`, arn)
+			}).(pulumi.StringOutput),
+			Tags: commonTags,
+		})
+		if err != nil {
+			return err
+		}
+
 		// ========================================
 		// SNS to SQS Subscriptions
 		// ========================================
@@ -384,6 +408,17 @@ func main() {
 			Topic:              agentResponseTopic.Arn,
 			Protocol:           pulumi.String("sqs"),
 			Endpoint:           agentResponseQueue.Arn,
+			RawMessageDelivery: pulumi.Bool(true),
+		})
+		if err != nil {
+			return err
+		}
+
+		// Schedule Creation Topic -> Schedule Creation Queue
+		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-schedule-creation-subscription-%s", stage), &sns.TopicSubscriptionArgs{
+			Topic:              scheduleCreationTopic.Arn,
+			Protocol:           pulumi.String("sqs"),
+			Endpoint:           scheduleCreationQueue.Arn,
 			RawMessageDelivery: pulumi.Bool(true),
 		})
 		if err != nil {
@@ -466,6 +501,30 @@ func main() {
 			return err
 		}
 
+		// Schedule Creation Queue Policy
+		scheduleCreationQueuePolicy, err := sqs.NewQueuePolicy(ctx, fmt.Sprintf("rez-agent-schedule-creation-queue-policy-%s", stage), &sqs.QueuePolicyArgs{
+			QueueUrl: scheduleCreationQueue.Url,
+			Policy: pulumi.All(scheduleCreationQueue.Arn, scheduleCreationTopic.Arn).ApplyT(func(args []interface{}) string {
+				queueArn := args[0].(string)
+				topicArn := args[1].(string)
+				return fmt.Sprintf(`{
+					"Version": "2012-10-17",
+					"Statement": [{
+						"Effect": "Allow",
+						"Principal": {"Service": "sns.amazonaws.com"},
+						"Action": "sqs:SendMessage",
+						"Resource": "%s",
+						"Condition": {
+							"ArnEquals": {"aws:SourceArn": "%s"}
+						}
+					}]
+				}`, queueArn, topicArn)
+			}).(pulumi.StringOutput),
+		})
+		if err != nil {
+			return err
+		}
+
 		// ========================================
 		// Systems Manager Parameters
 		// ========================================
@@ -508,11 +567,13 @@ func main() {
 				schedulesTable.Arn,
 				notificationsTopic.Arn,
 				webActionsTopic.Arn,
+				scheduleCreationQueue.Arn,
 			).ApplyT(func(args []interface{}) string {
 				messagesTableArn := args[0].(string)
 				schedulesTableArn := args[1].(string)
 				notificationsTopicArn := args[2].(string)
 				webActionsTopicArn := args[3].(string)
+				scheduleCreationQueueArn := args[4].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -530,6 +591,15 @@ func main() {
 							"Effect": "Allow",
 							"Action": ["sns:Publish"],
 							"Resource": ["%s", "%s"]
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"sqs:ReceiveMessage",
+								"sqs:DeleteMessage",
+								"sqs:GetQueueAttributes"
+							],
+							"Resource": "%s"
 						},
 						{
 							"Effect": "Allow",
@@ -565,7 +635,7 @@ func main() {
 						}
 					]
 				}`, messagesTableArn, messagesTableArn, schedulesTableArn, schedulesTableArn,
-					notificationsTopicArn, webActionsTopicArn, stage)
+					notificationsTopicArn, webActionsTopicArn, scheduleCreationQueueArn, stage)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -820,9 +890,10 @@ func main() {
 				Variables: pulumi.StringMap{
 					"DYNAMODB_TABLE_NAME":            messagesTable.Name,
 					"SCHEDULES_TABLE_NAME":           schedulesTable.Name,
-					"WEB_ACTIONS_TOPIC_ARN":          webActionsTopic.Arn,    // Topic-based routing
-					"NOTIFICATIONS_TOPIC_ARN":        notificationsTopic.Arn, // Topic-based routing
-					"SCHEDULE_CREATION_TOPIC_ARN":    scheduleCreationTopic.Arn,
+					"WEB_ACTIONS_TOPIC_ARN":          webActionsTopic.Arn,       // Topic-based routing
+					"NOTIFICATIONS_TOPIC_ARN":        notificationsTopic.Arn,    // Topic-based routing
+					"SCHEDULE_CREATION_TOPIC_ARN":    scheduleCreationTopic.Arn, // For publishing new schedule requests
+					"SCHEDULE_CREATION_QUEUE_URL":    scheduleCreationQueue.Url, // For receiving schedule creation requests
 					"WEB_ACTION_SQS_QUEUE_URL":       webActionsQueue.Url,
 					"NOTIFICATION_SQS_QUEUE_URL":     notificationsQueue.Url,
 					"EVENTBRIDGE_EXECUTION_ROLE_ARN": eventBridgeSchedulerExecutionRole.Arn,
@@ -1129,23 +1200,14 @@ func main() {
 		// EventBridge Scheduler
 		// ========================================
 
-		// Schedule Creation Topic -> Scheduler Lambda
-		_, err = sns.NewTopicSubscription(ctx, fmt.Sprintf("rez-agent-schedule-creation-subscription-%s", stage), &sns.TopicSubscriptionArgs{
-			Topic:    scheduleCreationTopic.Arn,
-			Protocol: pulumi.String("lambda"),
-			Endpoint: schedulerLambda.Arn,
-		})
-		if err != nil {
-			return err
-		}
-
-		// Allow SNS to invoke Scheduler Lambda
-		_, err = lambda.NewPermission(ctx, fmt.Sprintf("rez-agent-scheduler-sns-permission-%s", stage), &lambda.PermissionArgs{
-			Action:    pulumi.String("lambda:InvokeFunction"),
-			Function:  schedulerLambda.Name,
-			Principal: pulumi.String("sns.amazonaws.com"),
-			SourceArn: scheduleCreationTopic.Arn,
-		})
+		// SQS Event Source Mapping for Scheduler Lambda (Schedule Creation Queue)
+		_, err = lambda.NewEventSourceMapping(ctx, fmt.Sprintf("rez-agent-scheduler-sqs-trigger-%s", stage), &lambda.EventSourceMappingArgs{
+			EventSourceArn: scheduleCreationQueue.Arn,
+			FunctionName:   schedulerLambda.Arn,
+			BatchSize:      pulumi.Int(10),
+			Enabled:        pulumi.Bool(true),
+			// No filter criteria needed - dedicated queue for schedule creation
+		}, pulumi.DependsOn([]pulumi.Resource{scheduleCreationQueuePolicy}))
 		if err != nil {
 			return err
 		}

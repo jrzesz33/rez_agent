@@ -812,6 +812,7 @@ func main() {
 					"WEB_ACTION_SQS_QUEUE_URL":       webActionsQueue.Url,
 					"NOTIFICATION_SQS_QUEUE_URL":     notificationsQueue.Url,
 					"EVENTBRIDGE_EXECUTION_ROLE_ARN": eventBridgeSchedulerExecutionRole.Arn,
+					"BEDROCK_MODEL_ID":               pulumi.String("anthropic.claude-3-5-sonnet-20241022-v2:0"),
 					"STAGE":                          pulumi.String(stage),
 				},
 			},

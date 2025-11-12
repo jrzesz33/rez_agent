@@ -75,6 +75,12 @@ func NewAWSAgentEventHandler(
 		stage = "dev"
 	}
 
+	// Get model ID from environment variable, with fallback to latest Claude model
+	modelID := os.Getenv("BEDROCK_MODEL_ID")
+	if modelID == "" {
+		modelID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+	}
+
 	return &AWSAgentEventHandler{
 		bedrockClient:  bedrockClient,
 		httpClient:     httpClient,
@@ -84,7 +90,7 @@ func NewAWSAgentEventHandler(
 		logger:         logger,
 		maxRetries:     3,
 		retryDelay:     5 * time.Second,
-		modelID:        "anthropic.claude-3-5-sonnet-20241022-v2:0",
+		modelID:        modelID,
 	}
 }
 
@@ -266,10 +272,10 @@ func (h *AWSAgentEventHandler) getWeather(ctx context.Context, courseName string
 		return "", fmt.Errorf("course not found: %w", err)
 	}
 
-	// Hard-code weather URL for Birdsfoot (weather.gov API)
-	weatherURL := "https://api.weather.gov/gridpoints/TOP/31,80/forecast"
-	if course.CourseID == 2 { // Totteridge
-		weatherURL = "https://api.weather.gov/gridpoints/TOP/31,80/forecast" // TODO: Update with correct coordinates
+	// Get weather URL from course configuration
+	weatherURL, err := course.GetActionURL("get-weather")
+	if err != nil {
+		return "", fmt.Errorf("failed to get weather URL for course %s: %w", courseName, err)
 	}
 
 	// Call MCP tool get_weather

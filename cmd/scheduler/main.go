@@ -10,14 +10,17 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/logging"
 	"github.com/jrzesz33/rez_agent/internal/messaging"
 	"github.com/jrzesz33/rez_agent/internal/models"
 	"github.com/jrzesz33/rez_agent/internal/repository"
 	internalscheduler "github.com/jrzesz33/rez_agent/internal/scheduler"
+	"github.com/jrzesz33/rez_agent/internal/secrets"
 	appconfig "github.com/jrzesz33/rez_agent/pkg/config"
 )
 
@@ -29,6 +32,7 @@ type SchedulerHandler struct {
 	publisher            messaging.SNSPublisher
 	sqsProcessor         *messaging.SQSBatchProcessor
 	eventBridgeScheduler internalscheduler.EventBridgeScheduler
+	agentEventHandler    internalscheduler.AgentEventHandler
 	logger               *slog.Logger
 }
 
@@ -39,6 +43,7 @@ func NewSchedulerHandler(
 	scheduleRepo repository.ScheduleRepository,
 	pub messaging.SNSPublisher,
 	ebScheduler internalscheduler.EventBridgeScheduler,
+	agentHandler internalscheduler.AgentEventHandler,
 	sqsProcessor *messaging.SQSBatchProcessor,
 	logger *slog.Logger,
 ) *SchedulerHandler {
@@ -48,6 +53,7 @@ func NewSchedulerHandler(
 		scheduleRepository:   scheduleRepo,
 		publisher:            pub,
 		eventBridgeScheduler: ebScheduler,
+		agentEventHandler:    agentHandler,
 		sqsProcessor:         sqsProcessor,
 		logger:               logger,
 	}
@@ -78,7 +84,49 @@ func (h *SchedulerHandler) HandleEvent(ctx context.Context, event interface{}) e
 			h.logger.InfoContext(ctx, "detected EventBridge Scheduler trigger with custom payload")
 			return h.handleDynamicScheduleExecution(ctx, eventMap)
 		}
+
+		// Check if this is an agent event
+		if eventType, exists := eventMap["event_type"]; exists && eventType == "agent_scheduled" {
+			h.logger.InfoContext(ctx, "detected agent scheduled event")
+			return h.handleAgentEvent(ctx, eventMap)
+		}
 	}
+
+	return nil
+}
+
+// handleAgentEvent processes agent scheduled events
+func (h *SchedulerHandler) handleAgentEvent(ctx context.Context, eventMap map[string]interface{}) error {
+	// Parse event into ScheduledAgentEvent
+	scheduleID, _ := eventMap["schedule_id"].(string)
+	userPrompt, _ := eventMap["user_prompt"].(string)
+	courseName, _ := eventMap["course_name"].(string)
+	numPlayers, _ := eventMap["num_players"].(float64) // JSON numbers are float64
+
+	event := &internalscheduler.ScheduledAgentEvent{
+		ScheduleID: scheduleID,
+		UserPrompt: userPrompt,
+		CourseName: courseName,
+		NumPlayers: int(numPlayers),
+	}
+
+	h.logger.InfoContext(ctx, "processing agent event",
+		slog.String("schedule_id", event.ScheduleID),
+		slog.String("user_prompt", event.UserPrompt),
+	)
+
+	// Execute agent event handler
+	if err := h.agentEventHandler.ExecuteScheduledEvent(ctx, event); err != nil {
+		h.logger.ErrorContext(ctx, "agent event execution failed",
+			slog.String("schedule_id", event.ScheduleID),
+			slog.String("error", err.Error()),
+		)
+		return fmt.Errorf("agent event execution failed: %w", err)
+	}
+
+	h.logger.InfoContext(ctx, "agent event executed successfully",
+		slog.String("schedule_id", event.ScheduleID),
+	)
 
 	return nil
 }
@@ -376,6 +424,7 @@ func main() {
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	snsClient := sns.NewFromConfig(awsCfg)
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
+	bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
 
 	// Create repositories
 	messageRepo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
@@ -390,8 +439,20 @@ func main() {
 	// Create EventBridge Scheduler service
 	ebScheduler := internalscheduler.NewAWSEventBridgeScheduler(schedulerClient, cfg.EventBridgeExecutionRoleArn)
 
+	// Create HTTP client and secrets manager for agent event handler
+	httpClient := httpclient.NewClient(logger)
+	secretsManager := secrets.NewManager(awsCfg, logger)
+
+	// Create agent event handler
+	agentHandler := internalscheduler.NewAWSAgentEventHandler(
+		bedrockClient,
+		httpClient,
+		secretsManager,
+		logger,
+	)
+
 	// Create handler
-	handler := NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, sqsProcessor, logger)
+	handler := NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, agentHandler, sqsProcessor, logger)
 
 	// Start Lambda handler
 	lambda.Start(handler.HandleEvent)

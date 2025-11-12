@@ -141,18 +141,23 @@ func (h *SchedulerHandler) handleSNSEvent(ctx context.Context, message *models.M
 		)
 		return fmt.Errorf("failed to unmarshal schedule request: %w", err)
 	}*/
-	id := message.Arguments["action"].(string)
 
 	action := message.Arguments["action"].(string)
+	scheduleID := ""
+	if message.Arguments["schedule_id"] != nil {
+		scheduleID, _ = message.Arguments["schedule_id"].(string)
+	}
 	switch action {
 	case "create":
 		return h.createSchedule(ctx, message)
 	case "delete":
-		return h.deleteSchedule(ctx, id)
+		return h.deleteSchedule(ctx, scheduleID)
 	case "pause":
-		return h.pauseSchedule(ctx, id)
+		return h.pauseSchedule(ctx, scheduleID)
 	case "resume":
-		return h.resumeSchedule(ctx, id)
+		return h.resumeSchedule(ctx, scheduleID)
+	case "execute":
+		return h.executeSchedule(ctx, scheduleID)
 	default:
 		return fmt.Errorf("unknown action: %s", action)
 	}
@@ -323,6 +328,40 @@ func (h *SchedulerHandler) createSchedule(ctx context.Context, def *models.Messa
 		slog.String("eventbridge_arn", ebArn),
 	)
 
+	// Check if run_now is requested
+	runNow := false
+	if def.Arguments["run_now"] != nil {
+		runNow, _ = def.Arguments["run_now"].(bool)
+	}
+
+	// If run_now is true, publish an execute message to the Schedule Creation Topic
+	if runNow {
+		h.logger.InfoContext(ctx, "run_now requested, publishing execute message",
+			slog.String("schedule_id", schedule.ID),
+		)
+
+		executeMsg := models.NewMessage(
+			"scheduler-lambda",           // createdBy
+			map[string]interface{}{       // arguments
+				"action":      "execute",
+				"schedule_id": schedule.ID,
+			},
+			"1.0",                        // version
+			h.config.Stage,               // stage
+			models.MessageTypeScheduleCreation, // messageType
+			nil,                          // payload (not needed for execute)
+		)
+
+		// Publish to Schedule Creation Topic (will go through queue)
+		if err := h.publisher.PublishMessage(ctx, executeMsg); err != nil {
+			h.logger.WarnContext(ctx, "failed to publish execute message",
+				slog.String("schedule_id", schedule.ID),
+				slog.String("error", err.Error()),
+			)
+			// Don't fail the creation if execute publish fails
+		}
+	}
+
 	return nil
 }
 
@@ -394,6 +433,45 @@ func (h *SchedulerHandler) resumeSchedule(ctx context.Context, scheduleID string
 	}
 
 	return nil
+}
+
+// executeSchedule manually executes a schedule (run now functionality)
+func (h *SchedulerHandler) executeSchedule(ctx context.Context, scheduleID string) error {
+	h.logger.InfoContext(ctx, "executing schedule immediately",
+		slog.String("schedule_id", scheduleID),
+	)
+
+	// Get schedule from DynamoDB
+	schedule, err := h.scheduleRepository.GetSchedule(ctx, scheduleID)
+	if err != nil {
+		return fmt.Errorf("failed to get schedule: %w", err)
+	}
+
+	// Verify schedule is active
+	if schedule.Status != models.ScheduleStatusActive {
+		return fmt.Errorf("cannot execute inactive schedule: status=%s", schedule.Status)
+	}
+
+	// Prepare the execution event (same format as EventBridge would send)
+	payloadMap, err := schedule.GetPayloadMap()
+	if err != nil {
+		return fmt.Errorf("failed to get payload map: %w", err)
+	}
+
+	executionEvent := map[string]interface{}{
+		"schedule_id":   schedule.ID,
+		"schedule_name": schedule.Name,
+		"target_type":   schedule.TargetType,
+		"payload":       payloadMap,
+		"triggered_by":  "manual_execution",
+	}
+
+	// Route to appropriate handler based on target type
+	h.logger.InfoContext(ctx, "executing schedule with target type",
+		slog.String("target_type", string(schedule.TargetType)),
+	)
+
+	return h.handleDynamicScheduleExecution(ctx, executionEvent)
 }
 
 func main() {

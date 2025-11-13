@@ -40,12 +40,12 @@ func NewSNSClient(client *sns.Client, topicArn string, logger *slog.Logger) *SNS
 
 // TopicRoutingSNSClient implements SNSPublisher with message-type-based topic routing
 type TopicRoutingSNSClient struct {
-	client                  *sns.Client
-	webActionsTopicArn      string
-	notificationsTopicArn   string
-	agentResponseTopicArn   string
+	client                   *sns.Client
+	webActionsTopicArn       string
+	notificationsTopicArn    string
+	agentResponseTopicArn    string
 	scheduleCreationTopicArn string
-	logger                  *slog.Logger
+	logger                   *slog.Logger
 }
 
 // NewTopicRoutingSNSClient creates a new topic-routing SNS client
@@ -55,17 +55,17 @@ func NewTopicRoutingSNSClient(client *sns.Client, webActionsTopicArn, notificati
 	}
 
 	return &TopicRoutingSNSClient{
-		client:                  client,
-		webActionsTopicArn:      webActionsTopicArn,
-		notificationsTopicArn:   notificationsTopicArn,
-		agentResponseTopicArn:   agentResponseTopicArn,
+		client:                   client,
+		webActionsTopicArn:       webActionsTopicArn,
+		notificationsTopicArn:    notificationsTopicArn,
+		agentResponseTopicArn:    agentResponseTopicArn,
 		scheduleCreationTopicArn: scheduleCreationTopicArn,
-		logger:                  logger,
+		logger:                   logger,
 	}
 }
 
 // getTopicForMessageType returns the appropriate topic ARN based on message type
-func (s *TopicRoutingSNSClient) getTopicForMessageType(messageType models.MessageType) string {
+func (s *TopicRoutingSNSClient) GetTopicForMessageType(messageType models.MessageType) string {
 	switch messageType {
 	case models.MessageTypeWebAction:
 		return s.webActionsTopicArn
@@ -82,7 +82,7 @@ func (s *TopicRoutingSNSClient) getTopicForMessageType(messageType models.Messag
 // PublishMessage publishes a message to the appropriate topic based on message type
 func (s *TopicRoutingSNSClient) PublishMessage(ctx context.Context, message *models.Message) error {
 	// Determine which topic to use based on message type
-	topicArn := s.getTopicForMessageType(message.MessageType)
+	topicArn := s.GetTopicForMessageType(message.MessageType)
 
 	// Serialize message to JSON
 	messageBytes, err := json.Marshal(message)

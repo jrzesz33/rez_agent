@@ -32,7 +32,7 @@ logger.setLevel(logging.INFO)
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from course_config import load_course_config
 from cost_limiter import CostLimiter
-
+from response_handler import ResponseHandler
 # Environment variables
 STAGE = os.environ.get("STAGE", "dev")
 DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")

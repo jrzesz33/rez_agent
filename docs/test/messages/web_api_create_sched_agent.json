@@ -3,7 +3,7 @@
     "arguments": {
         "action": "create",
         "name": "daily-tee-time-check",
-        "schedule_expression": "cron(7 16 * * ? *)",
+        "schedule_expression": "cron(33 15 * * ? *)",
         "timezone": "America/New_York",
         "target_type": "web_action",
         "description": "Check for available tee times daily at 6 AM EST",

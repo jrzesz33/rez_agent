@@ -30,8 +30,10 @@ type Config struct {
 	EventBridgeExecutionRoleArn string // Role ARN for EventBridge Scheduler to invoke Lambda
 
 	// SQS Configuration
-	NotificationSQSQueueURL string
-	WebActionSQSQueueURL    string
+	NotificationSQSQueueURL    string
+	WebActionSQSQueueURL       string
+	ScheduleCreationQueueArn   string // ARN of SQS queue for EventBridge Scheduler targets
+	ScheduleCreationQueueURL   string // URL of SQS queue for schedule creation requests
 
 	// Ntfy Configuration
 	NtfyURL string

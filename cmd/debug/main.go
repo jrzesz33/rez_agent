@@ -2,26 +2,78 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 
-	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/logging"
 	"github.com/jrzesz33/rez_agent/internal/messaging"
+	"github.com/jrzesz33/rez_agent/internal/models"
 	"github.com/jrzesz33/rez_agent/internal/repository"
 	internalscheduler "github.com/jrzesz33/rez_agent/internal/scheduler"
 	"github.com/jrzesz33/rez_agent/internal/secrets"
 	appconfig "github.com/jrzesz33/rez_agent/pkg/config"
 )
 
+type Debugger struct {
+	config               *appconfig.Config
+	scheduleRepository   repository.ScheduleRepository
+	eventBridgeScheduler internalscheduler.EventBridgeScheduler
+	logger               *slog.Logger
+	agentEventHandler    internalscheduler.AgentEventHandler
+	publisher            messaging.SNSPublisher
+	messageRepository    repository.MessageRepository
+	ctx                  context.Context
+	scheduleHandler      internalscheduler.SchedulerHandler
+}
+
 func main() {
+
+	fmt.Println("Starting Debugger")
+	debug := NewDebugger()
+	err := debug.CreateSchedule()
+	if err != nil {
+		debug.logger.Error("failed to create schedule", slog.String("error", err.Error()))
+	} else {
+		debug.logger.Info("schedule created successfully")
+	}
+}
+
+func (d *Debugger) GetEvent(name string) (events.SQSEvent, error) {
+	var event events.SQSEvent
+	bytes, err := os.ReadFile(fmt.Sprintf("/workspaces/rez_agent/docs/test/messages/%s.json", name))
+	if err != nil {
+		return event, fmt.Errorf("failed to read event file: %w", err)
+	}
+
+	var msg models.Message
+	err = json.Unmarshal(bytes, &msg)
+	if err != nil {
+		return event, fmt.Errorf("failed to unmarshal event JSON: %w", err)
+	}
+
+	event.Records = []events.SQSMessage{
+		{
+			MessageId:     "debug-message-id",
+			ReceiptHandle: "debug-receipt-handle",
+			Body:          string(bytes),
+		},
+	}
+
+	return event, nil
+}
+
+func NewDebugger() *Debugger {
+
 	// Setup structured logging
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logging.GetLogLevel(),
@@ -58,9 +110,6 @@ func main() {
 	// Create publisher
 	publisher := messaging.NewTopicRoutingSNSClient(snsClient, cfg.WebActionsSNSTopicArn, cfg.NotificationsSNSTopicArn, cfg.AgentResponseTopicArn, cfg.ScheduleCreationTopicArn, logger)
 
-	// Initialize SQS processor
-	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
-
 	// Create EventBridge Scheduler service
 	ebScheduler := internalscheduler.NewAWSEventBridgeScheduler(schedulerClient, cfg.EventBridgeExecutionRoleArn)
 
@@ -76,9 +125,36 @@ func main() {
 		logger,
 	)
 
+	// Initialize SQS processor
+	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
+
 	// Create handler
 	handler := internalscheduler.NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, agentHandler, sqsProcessor, logger)
 
-	// Start Lambda handler
-	lambda.Start(handler.HandleEvent)
+	return &Debugger{
+		config:               cfg,
+		scheduleRepository:   scheduleRepo,
+		eventBridgeScheduler: ebScheduler,
+		logger:               logger,
+		agentEventHandler:    agentHandler,
+		publisher:            publisher,
+		messageRepository:    messageRepo,
+		ctx:                  context.Background(),
+		scheduleHandler:      *handler,
+	}
+
+}
+
+func (d *Debugger) CreateSchedule() error {
+	def, err := d.GetEvent("web_api_create_schedule")
+	if err != nil {
+		return fmt.Errorf("failed to get create schedule event: %w", err)
+	}
+
+	err = d.scheduleHandler.HandleEvent(d.ctx, def)
+	if err != nil {
+		return fmt.Errorf("failed to handle create schedule: %w", err)
+	}
+
+	return nil
 }

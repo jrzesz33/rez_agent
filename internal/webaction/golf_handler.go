@@ -477,6 +477,7 @@ func (h *GolfHandler) formatSearchResults(slots []models.TeeTimeSlot, params *mo
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, teeTimeStr))
 		sb.WriteString(fmt.Sprintf("   📍 %s\n", slot.CourseName))
 		sb.WriteString(fmt.Sprintf("   ⛳ %d holes available\n", slot.Holes))
+		sb.WriteString(fmt.Sprintf("   🎟️ Tee Sheet ID: %d\n", slot.TeeSheetID))
 
 		// Find pricing
 		for _, price := range slot.ShItemPrices {

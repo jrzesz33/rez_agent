@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/mcp/protocol"
+	"github.com/jrzesz33/rez_agent/internal/models"
 	"github.com/jrzesz33/rez_agent/internal/secrets"
 	"github.com/jrzesz33/rez_agent/pkg/courses"
 )
@@ -43,19 +45,23 @@ type ScheduledAgentEvent struct {
 
 	// TriggeredAt is when the event was triggered
 	TriggeredAt time.Time `json:"triggered_at"`
+
+	// AuthConfig contains authentication configuration
+	AuthConfig *models.AuthConfig `json:"auth_config,omitempty" dynamodbav:"auth_config,omitempty"`
 }
 
 // AWSAgentEventHandler implements AgentEventHandler using AWS Bedrock
 type AWSAgentEventHandler struct {
-	bedrockClient  *bedrockruntime.Client
-	httpClient     *httpclient.Client
-	secretsManager *secrets.Manager
-	mcpServerURL   string
-	stage          string
-	logger         *slog.Logger
-	maxRetries     int
-	retryDelay     time.Duration
-	modelID        string
+	bedrockClient        *bedrockruntime.Client
+	httpClient           *httpclient.Client
+	secretsManager       *secrets.Manager
+	mcpServerURL         string
+	stage                string
+	logger               *slog.Logger
+	maxRetries           int
+	retryDelay           time.Duration
+	modelID              string
+	defaultToolArguments map[string]interface{}
 }
 
 // NewAWSAgentEventHandler creates a new AWS-based agent event handler
@@ -96,6 +102,12 @@ func NewAWSAgentEventHandler(
 
 // ExecuteScheduledEvent processes a scheduled agent event
 func (h *AWSAgentEventHandler) ExecuteScheduledEvent(ctx context.Context, event *ScheduledAgentEvent) error {
+
+	// Set default tool arguments
+	defToolArgs := make(map[string]interface{})
+	defToolArgs["course_name"] = event.CourseName
+	h.defaultToolArguments = defToolArgs
+
 	h.logger.InfoContext(ctx, "starting scheduled agent event execution",
 		slog.String("schedule_id", event.ScheduleID),
 		slog.String("user_prompt", event.UserPrompt),
@@ -155,6 +167,14 @@ func (h *AWSAgentEventHandler) ExecuteScheduledEvent(ctx context.Context, event 
 
 // executeWithContext performs the actual agent execution
 func (h *AWSAgentEventHandler) executeWithContext(ctx context.Context, event *ScheduledAgentEvent) error {
+
+	// Step 3: Load MCP tools
+	h.logger.InfoContext(ctx, "loading MCP tools")
+	tools, err := h.getMCPTools(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load MCP tools: %w", err)
+	}
+
 	// Step 1: Fetch existing reservations
 	h.logger.InfoContext(ctx, "fetching existing reservations")
 	reservations, err := h.fetchReservations(ctx, event.CourseName)
@@ -171,13 +191,6 @@ func (h *AWSAgentEventHandler) executeWithContext(ctx context.Context, event *Sc
 			slog.String("error", err.Error()),
 		)
 		weather = "Weather forecast not available for this date range."
-	}
-
-	// Step 3: Load MCP tools
-	h.logger.InfoContext(ctx, "loading MCP tools")
-	tools, err := h.getMCPTools(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to load MCP tools: %w", err)
 	}
 
 	// Step 4: Construct system message with context
@@ -304,7 +317,8 @@ func (h *AWSAgentEventHandler) getWeather(ctx context.Context, courseName string
 func (h *AWSAgentEventHandler) getMCPTools(ctx context.Context) ([]protocol.Tool, error) {
 	// First initialize the MCP connection
 	initReq := map[string]interface{}{
-		"method": "initialize",
+		"jsonrpc": "2.0",
+		"method":  "initialize",
 		"params": map[string]interface{}{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]interface{}{},
@@ -321,8 +335,9 @@ func (h *AWSAgentEventHandler) getMCPTools(ctx context.Context) ([]protocol.Tool
 
 	// List available tools
 	listReq := map[string]interface{}{
-		"method": "tools/list",
-		"params": map[string]interface{}{},
+		"jsonrpc": "2.0",
+		"method":  "tools/list",
+		"params":  map[string]interface{}{},
 	}
 
 	var listResp protocol.ToolsListResult
@@ -361,11 +376,16 @@ IMPORTANT INSTRUCTIONS:
 7. If weather is too far in advance and unavailable, you may proceed with booking but mention this in the notification
 
 AVAILABLE TOOLS:
-- golf_search_tee_times: Search for available tee times
-- golf_book_tee_time: Book a specific tee time
+- golf_search_tee_times: Search for available tee times (returns tee sheet IDs needed for booking)
+- golf_book_tee_time: Book a specific tee time using the tee_sheet_id from search results
 - golf_get_reservations: Get existing reservations (already called)
 - get_weather: Get weather forecast (already called)
 - send_notification: Send push notification to user
+
+IMPORTANT BOOKING WORKFLOW:
+1. First call golf_search_tee_times to find available times
+2. The search results will include a "Tee Sheet ID" for each time slot
+3. Use that tee_sheet_id when calling golf_book_tee_time to complete the booking
 
 Now complete this task:`, currentDate, reservations, weather, event.NumPlayers)
 }
@@ -520,11 +540,22 @@ func (h *AWSAgentEventHandler) processToolCalls(ctx context.Context, content []t
 			// Parse input arguments - Bedrock uses document.Interface
 			var args map[string]interface{}
 			if toolUse.Value.Input != nil {
-				// Marshal and unmarshal to convert document.Interface to map
-				inputJSON, err := json.Marshal(toolUse.Value.Input)
-				if err == nil {
-					json.Unmarshal(inputJSON, &args)
+
+				bytes, err := toolUse.Value.Input.MarshalSmithyDocument()
+				if err != nil {
+					return nil, fmt.Errorf("failed to unmarshal tool input: %w", err)
 				}
+				err = json.Unmarshal(bytes, &args)
+				if err != nil {
+					return nil, fmt.Errorf("failed to unmarshal tool input JSON: %w", err)
+				}
+				// Add default tool arguments
+				for k, v := range h.defaultToolArguments {
+					if args[k] != nil {
+						args[k] = v
+					}
+				}
+
 			}
 
 			// Call MCP tool
@@ -598,8 +629,9 @@ func (h *AWSAgentEventHandler) callMCPTool(ctx context.Context, req protocol.Too
 	var result protocol.ToolCallResult
 
 	reqMap := map[string]interface{}{
-		"method": "tools/call",
-		"params": req,
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params":  req,
 	}
 
 	if err := h.callMCPMethod(ctx, reqMap, &result); err != nil {
@@ -633,10 +665,42 @@ func (h *AWSAgentEventHandler) callMCPMethod(ctx context.Context, reqData map[st
 		return fmt.Errorf("MCP server returned status %d", resp.StatusCode)
 	}
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response body: %v", err)
+	}
+
+	var respMap map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &respMap); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if errObj, exists := respMap["error"]; exists {
+		errBytes, _ := json.Marshal(errObj)
+		return fmt.Errorf("MCP error: %s", string(errBytes))
+	}
+
+	// Convert the byte slice to a string
+	bodyString := string(bodyBytes)
+
+	// Print the string representation of the response body
+	fmt.Println(bodyString)
+
 	if respData != nil {
-		if err := json.NewDecoder(resp.Body).Decode(respData); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
+
+		var rpcResp protocol.JSONRPCResponse
+		err = json.Unmarshal(bodyBytes, &rpcResp)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal JSON-RPC response: %w", err)
 		}
+
+		err = json.Unmarshal(rpcResp.Result, respData)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal result: %w", err)
+		}
+		//if err := json.NewDecoder(resp.Body).Decode(respData); err != nil {
+		//	return fmt.Errorf("failed to decode response: %w", err)
+		//}
 	}
 
 	return nil

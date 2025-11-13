@@ -50,6 +50,8 @@ const (
 	TargetTypeWebAction TargetType = "web_action"
 	// TargetTypeNotification sends a notification
 	TargetTypeNotification TargetType = "notification"
+	// TargetTypeNotification sends a notification
+	TargetTypeScheduler TargetType = "scheduled"
 	// TargetTypeCustom triggers a custom action
 	TargetTypeCustom TargetType = "custom"
 )

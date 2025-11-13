@@ -206,8 +206,8 @@ func (h *AWSAgentEventHandler) executeWithContext(ctx context.Context, event *Sc
 	if err != nil {
 		return fmt.Errorf("agent conversation failed: %w", err)
 	}
-
-	// Step 6: Send notification with results
+	fmt.Println(result)
+	/*/ Step 6: Send notification with results
 	h.logger.InfoContext(ctx, "sending notification with results")
 	if err := h.sendNotification(ctx, result); err != nil {
 		// Log but don't fail the entire operation if notification fails
@@ -222,7 +222,7 @@ func (h *AWSAgentEventHandler) executeWithContext(ctx context.Context, event *Sc
 			slog.String("error", err.Error()),
 		)
 	}
-
+	*/
 	h.logger.InfoContext(ctx, "agent event execution completed successfully")
 	return nil
 }
@@ -360,14 +360,13 @@ func (h *AWSAgentEventHandler) constructSystemMessage(event *ScheduledAgentEvent
 
 CURRENT DATE: %s
 
-EXISTING RESERVATIONS:
-%s
-
-WEATHER FORECAST:
-%s
-
 IMPORTANT INSTRUCTIONS:
-1. Check the existing reservations above to avoid booking conflicts
+
+1. The existing reservations and weather are provided, DO NOT book or search for tee times if there is an existing reservation on the requested date
+%s
+
+%s
+
 2. Consider the weather forecast - DO NOT book tee times if there is inclement weather (rain, storms, severe conditions)
 3. If the user hasn't specified the number of players, use %d player(s)
 4. You should AUTO-BOOK without asking for confirmation - this is a scheduled autonomous task
@@ -376,7 +375,7 @@ IMPORTANT INSTRUCTIONS:
 7. If weather is too far in advance and unavailable, you may proceed with booking but mention this in the notification
 
 AVAILABLE TOOLS:
-- golf_search_tee_times: Search for available tee times (returns tee sheet IDs needed for booking)
+- golf_search_tee_times: Search for available tee times and can only search one day per request, (returns tee sheet IDs needed for booking)
 - golf_book_tee_time: Book a specific tee time using the tee_sheet_id from search results
 - golf_get_reservations: Get existing reservations (already called)
 - get_weather: Get weather forecast (already called)
@@ -465,7 +464,8 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 
 		// Handle tool use
 		if stopReason == types.StopReasonToolUse {
-			toolResults, err := h.processToolCalls(ctx, converseOutput.Output.(*types.ConverseOutputMemberMessage).Value.Content)
+			content := converseOutput.Output.(*types.ConverseOutputMemberMessage).Value.Content
+			toolResults, err := h.processToolCalls(ctx, content)
 			if err != nil {
 				return "", fmt.Errorf("tool execution failed: %w", err)
 			}
@@ -475,7 +475,17 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 				Role:    types.ConversationRoleUser,
 				Content: toolResults,
 			})
+			for _, block := range content {
+				if toolUse, ok := block.(*types.ContentBlockMemberToolUse); ok {
+					toolName := *toolUse.Value.Name
 
+					// If the tool was send_notification, we can end here
+					if toolName == "send_push_notification" {
+						finalResponse = h.extractTextFromMessage(converseOutput.Output.(*types.ConverseOutputMemberMessage).Value)
+						return finalResponse, nil
+					}
+				}
+			}
 			// Continue loop to process tool results
 			continue
 		}
@@ -681,10 +691,10 @@ func (h *AWSAgentEventHandler) callMCPMethod(ctx context.Context, reqData map[st
 	}
 
 	// Convert the byte slice to a string
-	bodyString := string(bodyBytes)
+	//bodyString := string(bodyBytes)
 
 	// Print the string representation of the response body
-	fmt.Println(bodyString)
+	//fmt.Println(bodyString)
 
 	if respData != nil {
 
@@ -706,7 +716,7 @@ func (h *AWSAgentEventHandler) callMCPMethod(ctx context.Context, reqData map[st
 	return nil
 }
 
-// sendNotification sends a push notification with the booking result
+/*/ sendNotification sends a push notification with the booking result
 func (h *AWSAgentEventHandler) sendNotification(ctx context.Context, message string) error {
 	// Call MCP tool send_notification
 	req := protocol.ToolCallRequest{
@@ -757,7 +767,7 @@ func (h *AWSAgentEventHandler) checkWeatherForReservations(ctx context.Context, 
 
 	return nil
 }
-
+// */
 // isNonRetryableError checks if an error should not be retried
 func isNonRetryableError(err error) bool {
 	if err == nil {

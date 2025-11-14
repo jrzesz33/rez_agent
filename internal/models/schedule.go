@@ -59,7 +59,7 @@ const (
 // IsValid checks if the target type value is valid
 func (t TargetType) IsValid() bool {
 	switch t {
-	case TargetTypeWebAction, TargetTypeNotification, TargetTypeCustom:
+	case TargetTypeWebAction, TargetTypeNotification, TargetTypeCustom, TargetTypeScheduler:
 		return true
 	default:
 		return false
@@ -172,7 +172,7 @@ func NewSchedule(
 
 	// Only include relevant arguments for the schedule target
 	_newArgs := make(map[string]interface{})
-	if MessageType(scheduleOut.TargetType) == MessageTypeWebAction {
+	if scheduleOut.TargetType == TargetTypeScheduler {
 		if msg.Arguments["operation"] != nil {
 			_newArgs["operation"] = msg.Arguments["operation"]
 		} else {

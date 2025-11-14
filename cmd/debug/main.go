@@ -42,6 +42,7 @@ func main() {
 	debug := NewDebugger()
 	//err := debug.SchedulerEvent("web_api_create_schedule")
 	err := debug.SchedulerEvent("test")
+	//err := debug.SchedulerEvent("web_api_create_sched_agent")
 	if err != nil {
 		debug.logger.Error("failed to create schedule", slog.String("error", err.Error()))
 	} else {
@@ -130,7 +131,15 @@ func NewDebugger() *Debugger {
 	sqsProcessor := messaging.NewSQSBatchProcessor(logger)
 
 	// Create handler
-	handler := internalscheduler.NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, agentHandler, sqsProcessor, logger)
+	handler := internalscheduler.NewSchedulerHandler(
+		cfg,
+		messageRepo,
+		scheduleRepo,
+		publisher,
+		ebScheduler,
+		sqsProcessor,
+		logger,
+		agentHandler)
 
 	return &Debugger{
 		config:               cfg,

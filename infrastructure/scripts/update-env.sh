@@ -15,10 +15,10 @@ echo "SCHEDULE_CREATION_TOPIC_ARN=$(pulumi stack output scheduleCreationTopicArn
 echo "WEB_ACTIONS_TOPIC_ARN=$(pulumi stack output webActionsTopicArn)" >> .env
 echo "WEB_ACTION_SQS_QUEUE_URL=$(pulumi stack output webActionsQueueUrl)" >> .env
 echo "WEBAPI_URL=$(pulumi stack output webapiUrl)" >> .env
-echo "SCHEDULE_CREATION_QUEUE_URL=$(pulumi stack output scheduleCreationQueueUrl)" >> .env
+# echo "SCHEDULE_CREATION_QUEUE_URL=$(pulumi stack output scheduleCreationQueueUrl)" >> .env
 mv .env ../.env
 
 cd ..
 source .env
 
-echo "Environment variables updated in .env"
+echo "Environment variables updated in .env... WEBAPI_URL=$WEBAPI_URL"

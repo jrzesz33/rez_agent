@@ -77,7 +77,7 @@ func main() {
 	)
 
 	// Create handler
-	handler := internalscheduler.NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, agentHandler, sqsProcessor, logger)
+	handler := internalscheduler.NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, sqsProcessor, logger, agentHandler)
 
 	// Start Lambda handler
 	lambda.Start(handler.HandleEvent)

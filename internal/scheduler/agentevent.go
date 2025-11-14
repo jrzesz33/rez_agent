@@ -229,9 +229,7 @@ func (h *AWSAgentEventHandler) executeWithContext(ctx context.Context, event *Sc
 
 // validateEvent validates the scheduled agent event
 func (h *AWSAgentEventHandler) validateEvent(event *ScheduledAgentEvent) error {
-	if event.ScheduleID == "" {
-		return fmt.Errorf("schedule_id is required")
-	}
+
 	if event.UserPrompt == "" {
 		return fmt.Errorf("user_prompt is required")
 	}
@@ -482,6 +480,11 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 					// If the tool was send_notification, we can end here
 					if toolName == "send_push_notification" {
 						finalResponse = h.extractTextFromMessage(converseOutput.Output.(*types.ConverseOutputMemberMessage).Value)
+
+						// CLAUDE TODO... To improve the process i would like to log the prompt and conversation to a JSON file on S3...
+						// Please create a function and the infrastructure to write out a file for the Prompt information with metadata and System Message
+						// Please also create a file showing the conversation history including the Tool Outputs and Assistant responses
+
 						return finalResponse, nil
 					}
 				}

@@ -1,17 +1,22 @@
 {
     "version": "1.0",
+    "id": "msg_20251114184444_񕬘",
+    "created_date": "2025-11-14T18:44:44.818351Z",
+    "created_by": "scheduler",
     "stage": "dev",
-    "message_type": "schedule",
+    "message_type": "scheduled",
+    "status": "created",
     "payload": {
-        "schedule_id": "1234",
-        "course_name": "Birdsfoot Golf Course",
-        "user_prompt": "Can you please book me golf tee times for golf for both Saturday and Sunday for the next two weeks at Birdsfoot Golf Course on Saturday and Sunday starting at 10 AM?",
         "auth_config": {
             "secret_name": "rez-agent/golf/credentials-prod",
             "type": "oauth_password"
-        }
+        },
+        "course_name": "Birdsfoot Golf Course",
+        "user_prompt": "Can you please book me golf tee times for golf for both Saturday and Sunday for the next two weeks (up to 4 teetimes) at Birdsfoot Golf Course starting at 10 AM? Do not schedule if I already have a tee time on that day."
     },
     "arguments": {
-        "action": "agentEvent"
-    }
+        "operation": "agentEvent"
+    },
+    "updated_date": "2025-11-14T18:44:44.818351Z",
+    "retry_count": 0
 }

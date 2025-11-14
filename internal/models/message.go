@@ -173,7 +173,12 @@ func (m *Message) Validate() error {
 		if m.Arguments != nil && m.Arguments["action"] != nil {
 			action, ok := m.Arguments["action"].(string)
 			if !ok || action == "" {
-				return fmt.Errorf("invalid action argument for schedule creation message")
+				oper, okk := m.Arguments["operation"].(string)
+				if okk && oper != "" {
+					action = oper
+				} else {
+					return fmt.Errorf("invalid action argument for schedule creation message")
+				}
 			}
 			if action == "create" {
 				if m.Arguments["name"] == nil || m.Arguments["schedule_expression"] == nil || m.Arguments["target_type"] == nil || m.Arguments["timezone"] == nil {

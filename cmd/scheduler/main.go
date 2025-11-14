@@ -8,16 +8,13 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
-	"github.com/jrzesz33/rez_agent/internal/httpclient"
 	"github.com/jrzesz33/rez_agent/internal/logging"
 	"github.com/jrzesz33/rez_agent/internal/messaging"
 	"github.com/jrzesz33/rez_agent/internal/repository"
 	internalscheduler "github.com/jrzesz33/rez_agent/internal/scheduler"
-	"github.com/jrzesz33/rez_agent/internal/secrets"
 	appconfig "github.com/jrzesz33/rez_agent/pkg/config"
 )
 
@@ -49,7 +46,7 @@ func main() {
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	snsClient := sns.NewFromConfig(awsCfg)
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
-	bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
+	//bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
 
 	// Create repositories
 	messageRepo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
@@ -65,19 +62,19 @@ func main() {
 	ebScheduler := internalscheduler.NewAWSEventBridgeScheduler(schedulerClient, cfg.EventBridgeExecutionRoleArn)
 
 	// Create HTTP client and secrets manager for agent event handler
-	httpClient := httpclient.NewClient(logger)
-	secretsManager := secrets.NewManager(awsCfg, logger)
+	//httpClient := httpclient.NewClient(logger)
+	//secretsManager := secrets.NewManager(awsCfg, logger)
 
-	// Create agent event handler
+	/*/ Create agent event handler
 	agentHandler := internalscheduler.NewAWSAgentEventHandler(
 		bedrockClient,
 		httpClient,
 		secretsManager,
 		logger,
-	)
+	)*/
 
 	// Create handler
-	handler := internalscheduler.NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, agentHandler, sqsProcessor, logger)
+	handler := internalscheduler.NewSchedulerHandler(cfg, messageRepo, scheduleRepo, publisher, ebScheduler, sqsProcessor, logger)
 
 	// Start Lambda handler
 	lambda.Start(handler.HandleEvent)

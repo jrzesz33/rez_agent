@@ -1,0 +1,17 @@
+{
+    "version": "1.0",
+    "stage": "dev",
+    "message_type": "schedule",
+    "payload": {
+        "schedule_id": "1234",
+        "course_name": "Birdsfoot Golf Course",
+        "user_prompt": "Can you please book me golf tee times for golf for both Saturday and Sunday for the next two weeks at Birdsfoot Golf Course on Saturday and Sunday starting at 10 AM?",
+        "auth_config": {
+            "secret_name": "rez-agent/golf/credentials-prod",
+            "type": "oauth_password"
+        }
+    },
+    "arguments": {
+        "action": "agentEvent"
+    }
+}

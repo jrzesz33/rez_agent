@@ -40,6 +40,7 @@ func main() {
 
 	fmt.Println("Starting Debugger")
 	debug := NewDebugger()
+
 	//err := debug.SchedulerEvent("web_api_create_schedule")
 	err := debug.SchedulerEvent("test")
 	if err != nil {

@@ -1,4 +1,4 @@
-package scheduler
+package golfagent
 
 import (
 	"bytes"

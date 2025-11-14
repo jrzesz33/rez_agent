@@ -40,7 +40,8 @@ func main() {
 
 	fmt.Println("Starting Debugger")
 	debug := NewDebugger()
-	err := debug.CreateSchedule()
+	//err := debug.SchedulerEvent("web_api_create_schedule")
+	err := debug.SchedulerEvent("test")
 	if err != nil {
 		debug.logger.Error("failed to create schedule", slog.String("error", err.Error()))
 	} else {
@@ -145,8 +146,8 @@ func NewDebugger() *Debugger {
 
 }
 
-func (d *Debugger) CreateSchedule() error {
-	def, err := d.GetEvent("web_api_create_schedule")
+func (d *Debugger) SchedulerEvent(event string) error {
+	def, err := d.GetEvent(event)
 	if err != nil {
 		return fmt.Errorf("failed to get create schedule event: %w", err)
 	}

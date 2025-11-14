@@ -1,25 +1,17 @@
 {
     "version": "1.0",
-    "id": "msg_20251112222207_򘵐",
-    "created_date": "2025-11-12T22:22:07.346626Z",
-    "created_by": "scheduler",
     "stage": "dev",
-    "message_type": "web_action",
-    "status": "created",
+    "message_type": "schedule",
     "payload": {
-        "action": "golf",
+        "schedule_id": "1234",
+        "course_name": "Birdsfoot Golf Course",
+        "user_prompt": "Can you please book me golf tee times for golf for both Saturday and Sunday for the next two weeks at Birdsfoot Golf Course on Saturday and Sunday starting at 10 AM?",
         "auth_config": {
             "secret_name": "rez-agent/golf/credentials-prod",
             "type": "oauth_password"
-        },
-        "autoBook": false,
-        "courseID": 1,
-        "endSearchTime": "2025-11-15T16:30:00",
-        "startSearchTime": "2025-11-15T09:30:00"
+        }
     },
     "arguments": {
-        "operation": "search_tee_times"
-    },
-    "updated_date": "2025-11-12T22:22:07.346626Z",
-    "retry_count": 0
+        "action": "agentEvent"
+    }
 }

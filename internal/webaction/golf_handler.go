@@ -212,7 +212,7 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 	var strOut []string
 	if len(reservations) == 0 {
 		sb.WriteString("⛳ Golf Reservations\n\n")
-		sb.WriteString("No upcoming tee times found.\n")
+		sb.WriteString("No tee-times found.\n")
 		strOut = append(strOut, sb.String())
 		return strOut
 	}
@@ -239,43 +239,32 @@ func (h *GolfHandler) formatReservationNotification(reservations []GolfReservati
 		return reservations[i].TeeTimeDT.Before(reservations[j].TeeTimeDT)
 	})
 
-	// Limit to 4 tee times
-	maxReservations := 4
+	// Limit to 10 tee times
+	maxReservations := 10
 	if len(reservations) > maxReservations {
 		reservations = reservations[:maxReservations]
 	}
 
-	sb.WriteString("⛳ Upcoming Tee Times\n\n")
+	strCourseNm := ""
+	if len(reservations) > 0 {
+		strCourseNm = fmt.Sprintf(" at %s", strCourseNm)
+	}
+
+	sb.WriteString(fmt.Sprintf("⛳ Current Reservations:%s\n\n", strCourseNm))
 
 	for i, res := range reservations {
 		// Format tee time
 		teeTimeStr := res.TeeTimeDT.Format("Mon, Jan 2 at 3:04 PM")
 
-		// Days until tee time
-		daysUntil := int(time.Until(res.TeeTimeDT).Hours() / 24)
-		urgency := ""
-		if daysUntil == 0 {
-			urgency = " 🔴 TODAY"
-		} else if daysUntil == 1 {
-			urgency = " 🟡 TOMORROW"
-		} else if daysUntil <= 3 {
-			urgency = fmt.Sprintf(" 🟢 in %d days", daysUntil)
-		}
-
 		// Reservation header
-		sb.WriteString(fmt.Sprintf("%d. %s%s\n", i+1, teeTimeStr, urgency))
-
-		// Course name
-		if res.CourseName != "" {
-			sb.WriteString(fmt.Sprintf("   📍 %s\n", res.CourseName))
-		}
+		sb.WriteString(fmt.Sprintf("- %s\n", teeTimeStr))
 
 		// Players
-		sb.WriteString(fmt.Sprintf("   👥 %d player(s)\n", res.NumberOfPlayers))
+		sb.WriteString(fmt.Sprintf("	%d player(s)\n", res.NumberOfPlayers))
 
 		// Confirmation number
 		if res.ConfirmationNum != "" {
-			sb.WriteString(fmt.Sprintf("   🎟️ Confirmation: %s\n", res.ConfirmationNum))
+			sb.WriteString(fmt.Sprintf("	Confirmation: %s\n", res.ConfirmationNum))
 		}
 
 		// Separator
@@ -477,6 +466,7 @@ func (h *GolfHandler) formatSearchResults(slots []models.TeeTimeSlot, params *mo
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, teeTimeStr))
 		sb.WriteString(fmt.Sprintf("   📍 %s\n", slot.CourseName))
 		sb.WriteString(fmt.Sprintf("   ⛳ %d holes available\n", slot.Holes))
+		sb.WriteString(fmt.Sprintf("   🎟️ Tee Sheet ID: %d\n", slot.TeeSheetID))
 
 		// Find pricing
 		for _, price := range slot.ShItemPrices {

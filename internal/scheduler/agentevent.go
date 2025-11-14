@@ -55,6 +55,7 @@ type AWSAgentEventHandler struct {
 	bedrockClient        *bedrockruntime.Client
 	httpClient           *httpclient.Client
 	secretsManager       *secrets.Manager
+	agentLogger          *AgentLogger
 	mcpServerURL         string
 	stage                string
 	logger               *slog.Logger
@@ -69,6 +70,7 @@ func NewAWSAgentEventHandler(
 	bedrockClient *bedrockruntime.Client,
 	httpClient *httpclient.Client,
 	secretsManager *secrets.Manager,
+	agentLogger *AgentLogger,
 	logger *slog.Logger,
 ) *AWSAgentEventHandler {
 	mcpURL := os.Getenv("MCP_SERVER_URL")
@@ -91,6 +93,7 @@ func NewAWSAgentEventHandler(
 		bedrockClient:  bedrockClient,
 		httpClient:     httpClient,
 		secretsManager: secretsManager,
+		agentLogger:    agentLogger,
 		mcpServerURL:   mcpURL,
 		stage:          stage,
 		logger:         logger,
@@ -202,7 +205,7 @@ func (h *AWSAgentEventHandler) executeWithContext(ctx context.Context, event *Sc
 	)
 
 	// Step 5: Execute multi-step conversation with Bedrock
-	result, err := h.executeAgentConversation(ctx, systemMessage, event.UserPrompt, tools)
+	result, err := h.executeAgentConversation(ctx, event, systemMessage, reservations, weather, tools)
 	if err != nil {
 		return fmt.Errorf("agent conversation failed: %w", err)
 	}
@@ -371,6 +374,7 @@ IMPORTANT INSTRUCTIONS:
 5. After booking (or if booking fails), send a push notification with the result
 6. Be specific about what you booked (date, time, course, confirmation number)
 7. If weather is too far in advance and unavailable, you may proceed with booking but mention this in the notification
+8. The Course only allows booking 14 days in advance
 
 AVAILABLE TOOLS:
 - golf_search_tee_times: Search for available tee times and can only search one day per request, (returns tee sheet IDs needed for booking)
@@ -388,11 +392,53 @@ Now complete this task:`, currentDate, reservations, weather, event.NumPlayers)
 }
 
 // executeAgentConversation runs the multi-step conversation loop with Bedrock
-func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, systemMsg, userPrompt string, tools []protocol.Tool) (string, error) {
+func (h *AWSAgentEventHandler) executeAgentConversation(
+	ctx context.Context,
+	event *ScheduledAgentEvent,
+	systemMsg string,
+	reservations string,
+	weather string,
+	tools []protocol.Tool,
+) (string, error) {
+	startTime := time.Now()
+	executionID := fmt.Sprintf("%d", startTime.UnixNano())
+
 	h.logger.InfoContext(ctx, "executing agent conversation",
 		slog.String("model", h.modelID),
 		slog.Int("tools_available", len(tools)),
+		slog.String("execution_id", executionID),
 	)
+
+	// Define inference configuration
+	temperature := aws.Float32(0.7)
+	maxTokens := aws.Int32(4096)
+
+	// Log prompt information to S3 if agent logger is configured
+	if h.agentLogger != nil {
+		promptLog := &PromptLog{
+			ScheduleID:         event.ScheduleID,
+			ExecutionID:        executionID,
+			Timestamp:          startTime,
+			ModelID:            h.modelID,
+			Stage:              h.stage,
+			Temperature:        temperature,
+			MaxTokens:          maxTokens,
+			UserPrompt:         event.UserPrompt,
+			CourseName:         event.CourseName,
+			NumPlayers:         event.NumPlayers,
+			TriggeredAt:        event.TriggeredAt,
+			SystemMessage:      systemMsg,
+			Reservations:       reservations,
+			Weather:            weather,
+			AvailableToolCount: len(tools),
+		}
+
+		if err := h.agentLogger.LogPrompt(ctx, promptLog); err != nil {
+			h.logger.WarnContext(ctx, "failed to log prompt to S3",
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 
 	// Convert MCP tools to Bedrock tool specifications
 	bedrockTools := h.convertMCPToolsToBedrock(tools)
@@ -403,11 +449,14 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 			Role: types.ConversationRoleUser,
 			Content: []types.ContentBlock{
 				&types.ContentBlockMemberText{
-					Value: userPrompt,
+					Value: event.UserPrompt,
 				},
 			},
 		},
 	}
+
+	// Track stop reasons for conversation log
+	stopReasons := make([]types.StopReason, 0)
 
 	// Conversation loop - continue until no more tool calls
 	const maxIterations = 10 // Safety limit
@@ -432,8 +481,8 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 				Tools: bedrockTools,
 			},
 			InferenceConfig: &types.InferenceConfiguration{
-				MaxTokens:   aws.Int32(4096),
-				Temperature: aws.Float32(0.7),
+				MaxTokens:   maxTokens,
+				Temperature: temperature,
 			},
 		})
 
@@ -449,6 +498,8 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 
 		// Check stop reason
 		stopReason := converseOutput.StopReason
+		stopReasons = append(stopReasons, stopReason)
+
 		h.logger.InfoContext(ctx, "bedrock response received",
 			slog.String("stop_reason", string(stopReason)),
 		)
@@ -481,9 +532,29 @@ func (h *AWSAgentEventHandler) executeAgentConversation(ctx context.Context, sys
 					if toolName == "send_push_notification" {
 						finalResponse = h.extractTextFromMessage(converseOutput.Output.(*types.ConverseOutputMemberMessage).Value)
 
-						// CLAUDE TODO... To improve the process i would like to log the prompt and conversation to a JSON file on S3...
-						// Please create a function and the infrastructure to write out a file for the Prompt information with metadata and System Message
-						// Please also create a file showing the conversation history including the Tool Outputs and Assistant responses
+						// Log conversation history to S3
+						if h.agentLogger != nil {
+							duration := time.Since(startTime)
+							conversationLog := &ConversationLog{
+								ScheduleID:      event.ScheduleID,
+								ExecutionID:     executionID,
+								Timestamp:       startTime,
+								ModelID:         h.modelID,
+								Stage:           h.stage,
+								Temperature:     temperature,
+								MaxTokens:       maxTokens,
+								TotalIterations: iteration + 1,
+								Messages:        convertMessagesToLog(messages, stopReasons, startTime),
+								FinalResponse:   finalResponse,
+								Duration:        duration,
+							}
+
+							if err := h.agentLogger.LogConversation(ctx, conversationLog); err != nil {
+								h.logger.WarnContext(ctx, "failed to log conversation to S3",
+									slog.String("error", err.Error()),
+								)
+							}
+						}
 
 						return finalResponse, nil
 					}

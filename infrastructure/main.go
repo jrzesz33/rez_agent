@@ -108,6 +108,47 @@ func main() {
 		}
 
 		// ========================================
+		// S3 Bucket for Agent Logs
+		// ========================================
+		log.Printf("Creating S3 bucket for agent logs...")
+		agentLogsBucket, err := s3.NewBucket(ctx, fmt.Sprintf("rez-agent-logs-%s", stage), &s3.BucketArgs{
+			Bucket: pulumi.String(fmt.Sprintf("rez-agent-logs-%s", stage)),
+			Tags:   commonTags,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create agent logs S3 bucket: %w", err)
+		}
+
+		// Block public access to the logs bucket
+		_, err = s3.NewBucketPublicAccessBlock(ctx, fmt.Sprintf("rez-agent-logs-pab-%s", stage), &s3.BucketPublicAccessBlockArgs{
+			Bucket:                agentLogsBucket.ID(),
+			BlockPublicAcls:       pulumi.Bool(true),
+			BlockPublicPolicy:     pulumi.Bool(true),
+			IgnorePublicAcls:      pulumi.Bool(true),
+			RestrictPublicBuckets: pulumi.Bool(true),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create logs bucket public access block: %w", err)
+		}
+
+		// Configure lifecycle policy for agent logs (auto-delete after 90 days)
+		_, err = s3.NewBucketLifecycleConfigurationV2(ctx, fmt.Sprintf("rez-agent-logs-lifecycle-%s", stage), &s3.BucketLifecycleConfigurationV2Args{
+			Bucket: agentLogsBucket.ID(),
+			Rules: s3.BucketLifecycleConfigurationV2RuleArray{
+				&s3.BucketLifecycleConfigurationV2RuleArgs{
+					Id:     pulumi.String("delete-old-logs"),
+					Status: pulumi.String("Enabled"),
+					Expiration: &s3.BucketLifecycleConfigurationV2RuleExpirationArgs{
+						Days: pulumi.Int(90),
+					},
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create logs bucket lifecycle policy: %w", err)
+		}
+
+		// ========================================
 		// DynamoDB Table
 		// ========================================
 		log.Printf("Creating DynamoDB messages table...")
@@ -568,12 +609,14 @@ func main() {
 				notificationsTopic.Arn,
 				webActionsTopic.Arn,
 				scheduleCreationQueue.Arn,
+				agentLogsBucket.Arn,
 			).ApplyT(func(args []interface{}) string {
 				messagesTableArn := args[0].(string)
 				schedulesTableArn := args[1].(string)
 				notificationsTopicArn := args[2].(string)
 				webActionsTopicArn := args[3].(string)
 				scheduleCreationQueueArn := args[4].(string)
+				agentLogsBucketArn := args[5].(string)
 				return fmt.Sprintf(`{
 					"Version": "2012-10-17",
 					"Statement": [
@@ -600,6 +643,14 @@ func main() {
 								"sqs:GetQueueAttributes"
 							],
 							"Resource": "%s"
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
+								"s3:PutObject",
+								"s3:PutObjectAcl"
+							],
+							"Resource": "%s/*"
 						},
 						{
 							"Effect": "Allow",
@@ -635,7 +686,7 @@ func main() {
 						}
 					]
 				}`, messagesTableArn, messagesTableArn, schedulesTableArn, schedulesTableArn,
-					notificationsTopicArn, webActionsTopicArn, scheduleCreationQueueArn, stage)
+					notificationsTopicArn, webActionsTopicArn, scheduleCreationQueueArn, agentLogsBucketArn, stage)
 			}).(pulumi.StringOutput),
 		})
 		if err != nil {
@@ -908,6 +959,7 @@ func main() {
 					"NOTIFICATION_SQS_QUEUE_URL":     notificationsQueue.Url,
 					"EVENTBRIDGE_EXECUTION_ROLE_ARN": eventBridgeSchedulerExecutionRole.Arn,
 					"BEDROCK_MODEL_ID":               pulumi.String("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+					"AGENT_LOGS_BUCKET":              agentLogsBucket.ID(),
 					"MCP_SERVER_URL": httpApi.ApiEndpoint.ApplyT(func(endpoint string) string {
 						return fmt.Sprintf("%s/mcp", endpoint)
 					}).(pulumi.StringOutput),
@@ -1758,8 +1810,9 @@ func main() {
 		ctx.Export("agentSessionTableName", agentSessionTable.Name)
 		ctx.Export("agentSessionTableArn", agentSessionTable.Arn)
 
-		// S3 Deployment Bucket
+		// S3 Buckets
 		ctx.Export("lambdaDeploymentBucket", lambdaDeploymentBucket.ID())
+		ctx.Export("agentLogsBucket", agentLogsBucket.ID())
 
 		// API Gateway
 		ctx.Export("apiGatewayId", httpApi.ID())

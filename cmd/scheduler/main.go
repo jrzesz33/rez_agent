@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/jrzesz33/rez_agent/internal/httpclient"
@@ -50,6 +51,7 @@ func main() {
 	snsClient := sns.NewFromConfig(awsCfg)
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
 	bedrockClient := bedrockruntime.NewFromConfig(awsCfg)
+	s3Client := s3.NewFromConfig(awsCfg)
 
 	// Create repositories
 	messageRepo := repository.NewDynamoDBRepository(dynamoClient, cfg.DynamoDBTableName)
@@ -68,11 +70,25 @@ func main() {
 	httpClient := httpclient.NewClient(logger)
 	secretsManager := secrets.NewManager(awsCfg, logger)
 
+	// Create agent logger for S3 logging
+	agentLogsBucket := os.Getenv("AGENT_LOGS_BUCKET")
+	var agentLogger *internalscheduler.AgentLogger
+	if agentLogsBucket != "" {
+		agentLogger = internalscheduler.NewAgentLogger(s3Client, agentLogsBucket, cfg.Stage.String(), logger)
+		logger.Info("agent logger initialized",
+			slog.String("bucket", agentLogsBucket),
+			slog.String("stage", cfg.Stage.String()),
+		)
+	} else {
+		logger.Warn("AGENT_LOGS_BUCKET not configured, agent logging disabled")
+	}
+
 	// Create agent event handler
 	agentHandler := internalscheduler.NewAWSAgentEventHandler(
 		bedrockClient,
 		httpClient,
 		secretsManager,
+		agentLogger,
 		logger,
 	)
 

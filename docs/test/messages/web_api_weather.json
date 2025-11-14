@@ -5,7 +5,7 @@
     },
     "payload": {
         "courseID": 1,
-        "days": 2,
+        "days": 7,
         "action": "weather",
         "auth_config": {
             "type": "none"

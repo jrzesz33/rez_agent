@@ -171,7 +171,7 @@ func (d *Debugger) SchedulerEvent(event string) error {
 		return fmt.Errorf("failed to get create schedule event: %w", err)
 	}
 
-	err = d.scheduleHandler.HandleEvent(d.ctx, def)
+	_, err = d.scheduleHandler.HandleEvent(d.ctx, def)
 	if err != nil {
 		return fmt.Errorf("failed to handle create schedule: %w", err)
 	}

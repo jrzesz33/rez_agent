@@ -1,22 +1,20 @@
 {
-    "version": "1.0",
-    "id": "msg_20251114184444_񕬘",
-    "created_date": "2025-11-14T18:44:44.818351Z",
-    "created_by": "scheduler",
-    "stage": "dev",
-    "message_type": "scheduled",
-    "status": "created",
-    "payload": {
-        "auth_config": {
-            "secret_name": "rez-agent/golf/credentials-prod",
-            "type": "oauth_password"
-        },
-        "course_name": "Birdsfoot Golf Course",
-        "user_prompt": "Can you please book me golf tee times for golf for both Saturday and Sunday for the next two weeks (up to 4 teetimes) at Birdsfoot Golf Course starting at 10 AM? Do not schedule if I already have a tee time on that day."
-    },
-    "arguments": {
-        "operation": "agentEvent"
-    },
-    "updated_date": "2025-11-14T18:44:44.818351Z",
-    "retry_count": 0
+    "Records": [
+        {
+            "attributes": {
+                "ApproximateFirstReceiveTimestamp": "1763289028295",
+                "ApproximateReceiveCount": "1",
+                "SenderId": "AIDAIT2UOQQY3AUEKVGXU",
+                "SentTimestamp": "1763289028282"
+            },
+            "awsRegion": "us-east-1",
+            "body": "{\"version\":\"1.0\",\"id\":\"msg_20251114184444_񕬘\",\"created_date\":\"2025-11-14T18:44:44.818351Z\",\"created_by\":\"scheduler\",\"stage\":\"dev\",\"message_type\":\"scheduled\",\"status\":\"created\",\"payload\":{\"auth_config\":{\"secret_name\":\"rez-agent/golf/credentials-prod\",\"type\":\"oauth_password\"},\"course_name\":\"Birdsfoot Golf Course\",\"user_prompt\":\"Can you please book me golf tee times for golf for both Saturday and Sunday for the next two weeks (up to 4 teetimes) at Birdsfoot Golf Course starting at 10 AM? Do not schedule if I already have a tee time on that day.\"},\"arguments\":{\"operation\":\"agentEvent\"},\"updated_date\":\"2025-11-14T18:44:44.818351Z\",\"retry_count\":0}",
+            "eventSource": "aws:sqs",
+            "eventSourceARN": "arn:aws:sqs:us-east-1:944945738659:rez-agent-schedule-creation-dev",
+            "md5OfBody": "17599308a58e32381de0098951c0d59b",
+            "messageAttributes": {},
+            "messageId": "d46062b3-fdca-4832-8112-70f215c39644",
+            "receiptHandle": "AQEBTy1Cpb8ay4vzp/01Xrp/ywzb5wyf4uWTliJHKCKX5SM6VDYH2/iZ1yOYlMgyZyg0jxycHDDa9xTY+8TgNV4yr/AiHBDmo+7y2pVnHlAiH7M/HiBtD6kdAPHbG4MIR34kIHzbouffJmMQovioFE/LyeyyHg+txX85Rd0dU1ilPRwtXVCk6OfvheEZkzIwMKXI96F5+p0ot9fWqF5d5WAs8DXAdnFVvD95YDK1RWkEiwvv451sUL560m9kAgDxqbtl1TYuO+9TNu8miIBGkwrqW6ZpR5+eRe5E3NOX8br0EBykq9kjKgtBIyyoDqT6/teDkQwnTI50J8oqrFkKi+Wb8sSC5/NOzVU9jGvc0jHJPJLkqNmHe60RKSwa+ZitlN+9m8cZisTd7t1VZz9pKQE/3upEphan0h8F9oJKEohrsdg="
+        }
+    ]
 }

@@ -670,6 +670,14 @@ func main() {
 						{
 							"Effect": "Allow",
 							"Action": [
+								"bedrock:InvokeModel",
+								"bedrock:InvokeModelWithResponseStream"
+							],
+							"Resource": "*"
+						},
+						{
+							"Effect": "Allow",
+							"Action": [
 								"logs:CreateLogGroup",
 								"logs:CreateLogStream",
 								"logs:PutLogEvents"
@@ -958,7 +966,7 @@ func main() {
 					"WEB_ACTION_SQS_QUEUE_URL":       webActionsQueue.Url,
 					"NOTIFICATION_SQS_QUEUE_URL":     notificationsQueue.Url,
 					"EVENTBRIDGE_EXECUTION_ROLE_ARN": eventBridgeSchedulerExecutionRole.Arn,
-					"BEDROCK_MODEL_ID":               pulumi.String("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+					"BEDROCK_MODEL_ID":               pulumi.String("amazon.nova-lite-v1:0"),
 					"AGENT_LOGS_BUCKET":              agentLogsBucket.ID(),
 					"MCP_SERVER_URL": httpApi.ApiEndpoint.ApplyT(func(endpoint string) string {
 						return fmt.Sprintf("%s/mcp", endpoint)

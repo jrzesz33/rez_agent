@@ -1,5 +1,5 @@
 cd /workspaces/rez_agent
-make build-scheduler
+make build-agent
 cd infrastructure
 go build -o pulumi-rez-agent .
 pulumi up -y

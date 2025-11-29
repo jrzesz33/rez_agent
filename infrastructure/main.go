@@ -77,6 +77,7 @@ func main() {
 		log.Printf("Creating S3 bucket for Lambda deployment artifacts...")
 		lambdaDeploymentBucket, err := s3.NewBucket(ctx, fmt.Sprintf("rez-agent-lambda-deployments-%s", stage), &s3.BucketArgs{
 			Bucket: pulumi.String(fmt.Sprintf("rez-agent-lambda-deployments-%s", stage)),
+			ForceDestroy: pulumi.Bool(true),
 			Tags:   commonTags,
 		})
 		if err != nil {
@@ -113,6 +114,7 @@ func main() {
 		log.Printf("Creating S3 bucket for agent logs...")
 		agentLogsBucket, err := s3.NewBucket(ctx, fmt.Sprintf("rez-agent-logs-%s", stage), &s3.BucketArgs{
 			Bucket: pulumi.String(fmt.Sprintf("rez-agent-logs-%s", stage)),
+			ForceDestroy: pulumi.Bool(true),
 			Tags:   commonTags,
 		})
 		if err != nil {

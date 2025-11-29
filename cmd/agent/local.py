@@ -6,13 +6,13 @@ app = Flask(__name__)
 # Import your Lambda handler function
 from main import async_lambda_handler
 
-@app.route(path='/agent', methods=['POST'])
-async def serve_js_handler(path):
+@app.route('/agent', methods=['POST'])
+async def serve_js_handler():
     # Simulate API Gateway event
     event = {
         "httpMethod": request.method,
-        "rawPath": f"/agent",
-        "path": f"/{path}",
+        "rawPath": "/agent",
+        "path": "/agent",
         "queryStringParameters": request.args,
         "headers": dict(request.headers),
         "body": request.data,
@@ -33,13 +33,13 @@ async def serve_js_handler(path):
     
     return body, status_code, hdrs
 
-@app.route(path='/agent/ui', methods=['GET'])
-async def serve_lambda_handler(path):
+@app.route('/agent/ui', methods=['GET'])
+async def serve_lambda_handler():
     # Simulate API Gateway event
     event = {
         "httpMethod": request.method,
-        "rawPath": f"/agent/ui",
-        "path": f"/{path}",
+        "rawPath": "/agent/ui",
+        "path": "/agent/ui",
         "queryStringParameters": request.args,
         "headers": dict(request.headers),
         "body": request.data.decode('utf-8') if request.data else json.dumps({'message': 'Body successfully processed'}),
